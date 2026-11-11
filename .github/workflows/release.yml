@@ -25,7 +25,7 @@ jobs:
         run: npm ci
       - name: Usar la versión de la etiqueta
         shell: pwsh
-        run: npm version $env:GITHUB_REF_NAME.TrimStart('v') --no-git-tag-version
+        run: npm version $env:GITHUB_REF_NAME.TrimStart('v') --no-git-tag-version --allow-same-version
       - name: Pruebas
         run: npm test
       - name: Compilar y publicar instalador
