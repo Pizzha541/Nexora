@@ -4,7 +4,7 @@ NEXORA es una aplicación de escritorio independiente para controlar y personali
 
 ## Estado actual
 
-La versión `0.1.0-alpha` incluye interfaz navegable, perfiles y carpetas persistentes, editor de las 12 teclas, biblioteca reutilizable de PNG/JPG/WEBP/GIF, Initial Screen y Plugin Hub. El backend Electron integrado envía imágenes, GIF por fotogramas y composiciones panorámicas 6×2. El runtime experimental de Stream Deck ejecutó una muestra oficial; Macro Deck 3 está limitado a instalación e inspección hasta completar su protocolo.
+La versión `0.1.0-alpha` incluye interfaz navegable, perfiles y carpetas persistentes, editor de las 12 teclas, biblioteca reutilizable de PNG/JPG/WEBP/GIF, Initial Screen y Plugin Hub. El backend Electron integrado envía imágenes, GIF por fotogramas y composiciones panorámicas 6×2. También incluye estado en tiempo real, guardado automático, cola USB incremental, Drag & Drop global, acciones OBS WebSocket 5.x y un host experimental de Property Inspector. El runtime de Stream Deck ejecutó una muestra oficial; Macro Deck 3 está limitado a instalación e inspección hasta completar su protocolo.
 
 ## Desarrollo
 

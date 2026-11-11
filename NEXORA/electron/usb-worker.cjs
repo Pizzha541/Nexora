@@ -16,7 +16,7 @@ const gifs = new Map();
 function emit(message) { parentPort?.postMessage(message); }
 function reply(id, ok, extra = {}) { emit({ type: 'response', id, ok, ...extra }); }
 function log(level, message) { emit({ type: 'log', level, message }); }
-function status(message = '') { emit({ type: 'status', connected: Boolean(pad), ready, message }); }
+function status(message = '') { emit({ type: 'status', connected: Boolean(pad && ready), ready, message }); }
 
 function keyIndex(key) {
   const value = Number(key);
@@ -175,6 +175,8 @@ async function connect() {
     pad.on('error', (error) => {
       log('error', `USB: ${error.message}`);
       ready = false;
+      try { pad?.close(); } catch {}
+      pad = null;
       status(error.message);
     });
     ready = true;

@@ -55,6 +55,10 @@ export async function setActiveProfile(profileId: string): Promise<void> {
   }
 }
 
+export async function setProfileOrder(profileIds: string[]): Promise<void> {
+  await invoke("set_profile_order", { profileIds });
+}
+
 export async function setDeviceMode(mode: DeviceMode): Promise<BootstrapState["device"]> {
   try {
     return await invoke("set_device_mode", { mode });
@@ -77,6 +81,10 @@ export async function listenForButtonEvents(durationMs = 15_000): Promise<Button
 
 export async function testObsConnection(url: string, password: string): Promise<string> {
   return invoke<string>("test_obs_connection", { url, password });
+}
+
+export async function executeObsAction(action: string, settings: Record<string, unknown> = {}): Promise<string> {
+  return invoke<string>("obs_action", { action, settings });
 }
 
 export async function importVisualAsset(file: File): Promise<VisualAsset> {
@@ -163,6 +171,10 @@ export async function setPluginExecutionApproval(pluginId: string, approved: boo
 
 export async function executePluginAction(pluginId: string, actionId: string, settings: Record<string, unknown>, keyIndex = 0): Promise<string> {
   return invoke<string>("plugin_execute_action", { pluginId, actionId, settings, keyIndex });
+}
+
+export async function openPluginPropertyInspector(pluginId: string, actionId: string, settings: Record<string, unknown>, contextId: string, keyIndex: number): Promise<string> {
+  return invoke<string>("plugin_open_property_inspector", { pluginId, actionId, settings, contextId, keyIndex });
 }
 
 export async function uninstallPlugin(pluginId: string): Promise<string> {

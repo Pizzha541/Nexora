@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createPluginService } = require('./plugin-service.cjs');
+const { ObsService } = require('./obs-service.cjs');
 
 const instanceLock = app.requestSingleInstanceLock();
 if (!instanceLock) app.quit();
@@ -16,8 +17,15 @@ let requestId = 0;
 let activeKeys = null;
 let rendererReady = false;
 let pluginService = null;
+let obsService = null;
+const propertyInspectorWindows = new Map();
 const pending = new Map();
 const buttonEvents = [];
+const pendingKeySync = new Map();
+let keySyncTimer = null;
+let usbSequence = Promise.resolve();
+let reconnectTimer = null;
+let shuttingDown = false;
 
 const windowsLocalData = process.platform === 'win32'
   ? path.resolve(app.getPath('appData'), '..', 'Local')
@@ -54,13 +62,24 @@ function readJson(file, fallback) {
 
 function writeJson(file, value) {
   ensureDirectories();
-  const temporary = `${file}.tmp`;
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
   if (fs.existsSync(file)) {
     const backup = path.join(dataRoot, 'backups', `${path.basename(file)}.bak`);
     fs.copyFileSync(file, backup);
   }
-  fs.writeFileSync(temporary, JSON.stringify(value, null, 2), 'utf8');
-  fs.renameSync(temporary, file);
+  const descriptor = fs.openSync(temporary, 'wx');
+  try {
+    fs.writeFileSync(descriptor, JSON.stringify(value, null, 2), 'utf8');
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  try {
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    throw error;
+  }
 }
 
 function createKey(index) {
@@ -118,6 +137,10 @@ function loadRepository() {
   let settingsChanged = !settingsExisted;
   if (!settings.visualSettings) settingsChanged = true;
   settings.visualSettings = { ...defaultVisualSettings(), ...(settings.visualSettings || {}) };
+  if (Array.isArray(settings.profileOrder)) {
+    const order = new Map(settings.profileOrder.map((id, index) => [id, index]));
+    profiles.sort((left, right) => (order.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(right.id) ?? Number.MAX_SAFE_INTEGER));
+  }
   if (!profiles.some((profile) => profile.id === settings.activeProfileId)) {
     settings.activeProfileId = profiles[0].id;
     settingsChanged = true;
@@ -175,7 +198,7 @@ async function applyPluginFeedback(value) {
     }
   }
   if (file) {
-    const result = await workerRequest('image', { key: keyIndex + 1, file });
+    const result = await serialWorkerRequest('image', { key: keyIndex + 1, file });
     if (!result.ok) appendLog('plugin-feedback-usb', result.error);
   }
 }
@@ -204,7 +227,12 @@ function handleWorkerMessage(message) {
     if (resolve) { pending.delete(message.id); resolve(message); }
     return;
   }
-  if (message.type === 'status') workerConnected = Boolean(message.connected);
+  if (message.type === 'status') {
+    const wasConnected = workerConnected;
+    workerConnected = Boolean(message.connected && message.ready !== false);
+    if (!wasConnected && workerConnected) void syncDesiredPage();
+    if (!workerConnected) scheduleReconnect();
+  }
   if (message.type === 'event' && (message.name === 'buttonDown' || message.name === 'buttonUp')) {
     const event = { key: message.key, pressed: message.name === 'buttonDown', timestampMs: Date.now(), rawOffset42: 0, rawOffset47: 0 };
     buttonEvents.push(event);
@@ -212,6 +240,20 @@ function handleWorkerMessage(message) {
     if (event.pressed) void runKeyAction(event.key);
   }
   sendEvent(message);
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer || shuttingDown) return;
+  let repository;
+  try { repository = loadRepository(); } catch { return; }
+  if (repository.settings.deviceMode !== 'hardware') return;
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    const result = await serialWorkerRequest('connect');
+    if (result.ok) await syncDesiredPage();
+    else scheduleReconnect();
+  }, 2000);
+  reconnectTimer.unref();
 }
 
 function workerRequest(command, payload = {}, timeout = 180_000) {
@@ -225,6 +267,62 @@ function workerRequest(command, payload = {}, timeout = 180_000) {
     pending.set(id, (value) => { clearTimeout(timer); resolve(value); });
     worker.postMessage({ id, command, ...payload });
   });
+}
+
+function serialWorkerRequest(command, payload = {}, timeout = 180_000) {
+  const run = () => workerRequest(command, payload, timeout);
+  const result = usbSequence.then(run, run);
+  usbSequence = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function cancelPendingKeySync(message = 'Sincronización sustituida por una página más reciente.') {
+  if (keySyncTimer) clearTimeout(keySyncTimer);
+  keySyncTimer = null;
+  for (const item of pendingKeySync.values()) {
+    item.waiters.forEach((resolve) => resolve({ ok: true, superseded: true, message }));
+  }
+  pendingKeySync.clear();
+}
+
+async function writeHardwareKey(key) {
+  if (!workerConnected) return { ok: true, deferred: true };
+  const repository = loadRepository();
+  const file = key?.iconPath ? assetPath(key.iconPath, repository) : null;
+  return file
+    ? serialWorkerRequest(key.animated ? 'gifStart' : 'image', { key: key.index + 1, file })
+    : serialWorkerRequest('clear', { key: key.index + 1 });
+}
+
+async function flushPendingKeySync() {
+  if (keySyncTimer) clearTimeout(keySyncTimer);
+  keySyncTimer = null;
+  const jobs = [...pendingKeySync.values()].sort((left, right) => left.key.index - right.key.index);
+  pendingKeySync.clear();
+  for (const job of jobs) {
+    const result = await writeHardwareKey(job.key);
+    job.waiters.forEach((resolve) => resolve(result));
+    sendEvent({ type: 'hardware-sync', keyIndex: job.key.index, ok: Boolean(result.ok), deferred: Boolean(result.deferred), error: result.error });
+  }
+}
+
+function queueHardwareKey(key) {
+  if (!key || !Number.isInteger(key.index) || key.index < 0 || key.index > 11) return Promise.resolve({ ok: false, error: 'Tecla fuera de rango.' });
+  if (!activeKeys) activeKeys = Array.from({ length: 12 }, (_, index) => ({ index, actions: [{ kind: 'none' }] }));
+  activeKeys[key.index] = structuredClone(key);
+  return new Promise((resolve) => {
+    const current = pendingKeySync.get(key.index);
+    pendingKeySync.set(key.index, { key: structuredClone(key), waiters: [...(current?.waiters || []), resolve] });
+    if (keySyncTimer) clearTimeout(keySyncTimer);
+    keySyncTimer = setTimeout(() => { void flushPendingKeySync(); }, 90);
+    keySyncTimer.unref();
+  });
+}
+
+async function syncDesiredPage(repository = loadRepository()) {
+  if (!activeKeys || !workerConnected) return { ok: true, deferred: true };
+  cancelPendingKeySync();
+  return serialWorkerRequest('page', { keys: mapHardwareKeys(activeKeys, repository) });
 }
 
 function assetPath(assetId, repository = loadRepository()) {
@@ -264,6 +362,8 @@ async function runKeyAction(keyNumber) {
       if (error) throw new Error(error);
     } else if (action.kind === 'plugin') {
       await pluginService.execute(action.pluginId, action.actionId, action.settings || {}, action.contextId, keyNumber - 1);
+    } else if (action.kind === 'obs') {
+      await obsService.action(action.value, action.settings || {});
     }
   } catch (error) {
     sendEvent({ type: 'log', level: 'error', message: `Tecla ${keyNumber}: ${error.message}` });
@@ -283,7 +383,7 @@ async function invoke(command, args) {
         ? { connected: true, mode, name: 'DisplayPad simulado' }
         : { connected: workerConnected, mode, name: 'Mountain DisplayPad', vendorId: 0x3282, productId: 0x0009, lastError: workerConnected ? undefined : 'Pulsa «Volver a detectar».' },
       integrations: [
-        { id: 'obs', name: 'OBS Studio', status: 'unconfigured', detail: 'WebSocket 5.x · puerto 4455', priority: 1 },
+        { id: 'obs', name: 'OBS Studio', status: obsService?.connected ? 'connected' : 'unconfigured', detail: obsService?.connected ? 'WebSocket 5.x conectado' : 'WebSocket 5.x · puerto 4455', priority: 1 },
         { id: 'voxora', name: 'VOXORA TTS', status: 'unconfigured', detail: 'Esperando interfaz de comunicación', priority: 2 },
         { id: 'discord', name: 'Discord', status: 'unconfigured', detail: 'Módulo oficial/autorizado por definir', priority: 3 },
         { id: 'twitch', name: 'Twitch', status: 'unconfigured', detail: 'Módulo preparado', priority: 4 },
@@ -314,6 +414,14 @@ async function invoke(command, args) {
     return repository.settings.activeProfileId;
   }
   if (command === 'set_active_profile') { repository.settings.activeProfileId = args.profileId; saveSettings(repository.settings); return null; }
+  if (command === 'set_profile_order') {
+    const ids = Array.isArray(args.profileIds) ? args.profileIds.map(String) : [];
+    const known = new Set(repository.profiles.map((profile) => profile.id));
+    if (ids.length !== known.size || ids.some((id) => !known.has(id)) || new Set(ids).size !== ids.length) throw new Error('Orden de perfiles inválido.');
+    repository.settings.profileOrder = ids;
+    saveSettings(repository.settings);
+    return null;
+  }
   if (command === 'save_macro') return saveMacro(structuredClone(args.macroDefinition));
   if (command === 'delete_macro') {
     const source = path.join(dataRoot, 'macros', `${args.macroId}.json`);
@@ -323,13 +431,17 @@ async function invoke(command, args) {
   if (command === 'set_device_mode') {
     repository.settings.deviceMode = args.mode;
     saveSettings(repository.settings);
-    if (args.mode === 'hardware') await workerRequest('connect');
+    if (args.mode === 'hardware') {
+      await serialWorkerRequest('connect');
+      await syncDesiredPage(repository);
+    }
     return args.mode === 'simulation'
       ? { connected: true, mode: 'simulation', name: 'DisplayPad simulado' }
       : { connected: workerConnected, mode: 'hardware', name: 'Mountain DisplayPad', vendorId: 0x3282, productId: 0x0009 };
   }
   if (command === 'refresh_device_status') {
-    const result = await workerRequest('connect');
+    const result = await serialWorkerRequest('connect');
+    if (result.ok) await syncDesiredPage(repository);
     return { connected: Boolean(result.connected || workerConnected), mode: 'hardware', name: 'Mountain DisplayPad', vendorId: 0x3282, productId: 0x0009, lastError: result.ok ? undefined : result.error };
   }
   if (command === 'listen_for_button_events') {
@@ -390,33 +502,65 @@ async function invoke(command, args) {
     const result = await pluginService.execute(args.pluginId, args.actionId, args.settings || {}, args.contextId, args.keyIndex || 0);
     return result.ok ? 'Acción enviada al runtime compatible.' : 'La acción no pudo ejecutarse.';
   }
+  if (command === 'plugin_open_property_inspector') {
+    const descriptor = await pluginService.openInspector(args.pluginId, args.actionId, args.settings || {}, args.contextId, args.keyIndex || 0);
+    propertyInspectorWindows.get(descriptor.context)?.close();
+    const inspector = new BrowserWindow({
+      width: 430, height: 720, minWidth: 360, minHeight: 480,
+      title: `NEXORA · ${args.pluginId}`,
+      parent: window || undefined, show: false, backgroundColor: '#1c1c1c',
+      webPreferences: {
+        contextIsolation: true, nodeIntegration: false, sandbox: true,
+        partition: `nexora-pi-${String(args.pluginId).replace(/[^a-z0-9._-]/gi, '-').slice(0, 80)}`,
+      },
+    });
+    propertyInspectorWindows.set(descriptor.context, inspector);
+    inspector.removeMenu();
+    inspector.webContents.setWindowOpenHandler(({ url }) => {
+      if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+      return { action: 'deny' };
+    });
+    inspector.webContents.on('will-navigate', (event, url) => {
+      if (/^https?:\/\//i.test(url)) { event.preventDefault(); void shell.openExternal(url); }
+    });
+    inspector.once('closed', () => {
+      propertyInspectorWindows.delete(descriptor.context);
+      pluginService.closeInspector(args.pluginId, descriptor.context);
+    });
+    inspector.webContents.once('did-finish-load', () => {
+      const call = `window.connectElgatoStreamDeckSocket?.(${JSON.stringify(String(descriptor.port))},${JSON.stringify(descriptor.context)},"registerPropertyInspector",${JSON.stringify(JSON.stringify(descriptor.info))},${JSON.stringify(JSON.stringify(descriptor.actionInfo))})`;
+      void inspector.webContents.executeJavaScript(call).catch((error) => appendLog('property-inspector', error.message));
+      inspector.show();
+    });
+    await inspector.loadFile(descriptor.file);
+    return 'Property Inspector abierto en una ventana aislada.';
+  }
   if (command === 'plugin_uninstall') return pluginService.uninstall(args.pluginId, args.confirmed);
   if (command === 'plugin_read_icon') return pluginService.icon(args.pluginId);
   if (command === 'hardware_apply_page') {
     activeKeys = structuredClone(args.keys || []);
-    const result = await workerRequest('page', { keys: mapHardwareKeys(activeKeys, repository) });
+    cancelPendingKeySync();
+    if (!workerConnected) return 'Página guardada; se enviará al reconectar el DisplayPad.';
+    const result = await serialWorkerRequest('page', { keys: mapHardwareKeys(activeKeys, repository) });
     if (!result.ok) throw new Error(result.error);
     return 'Página enviada a las doce teclas.';
   }
   if (command === 'hardware_apply_key') {
     const key = args.key;
-    if (!activeKeys) activeKeys = Array.from({ length: 12 }, (_, index) => ({ index, actions: [{ kind: 'none' }] }));
-    activeKeys[key.index] = structuredClone(key);
-    const file = key?.iconPath ? assetPath(key.iconPath, repository) : null;
-    const result = file
-      ? await workerRequest(key.animated ? 'gifStart' : 'image', { key: key.index + 1, file })
-      : await workerRequest('clear', { key: key.index + 1 });
+    const result = await queueHardwareKey(key);
     if (!result.ok) throw new Error(result.error);
+    if (result.deferred) return `Tecla ${key.index + 1} guardada; se enviará al reconectar.`;
     return key.animated ? `GIF activo en tecla ${key.index + 1}.` : `Imagen enviada a tecla ${key.index + 1}.`;
   }
   if (command === 'hardware_apply_initial') {
     const assetId = repository.settings.visualSettings.initialAssetId;
     const file = assetId ? assetPath(assetId, repository) : builtinBannerPath();
-    const result = await workerRequest('startupImage', { file });
+    const result = await serialWorkerRequest('startupImage', { file });
     if (!result.ok) throw new Error(result.error);
     return 'Initial Screen enviada a las doce teclas.';
   }
-  if (command === 'test_obs_connection') throw new Error('La prueba OBS continúa disponible en la edición Tauri durante la migración.');
+  if (command === 'test_obs_connection' || command === 'obs_connect') return obsService.connect(args.url, args.password || '');
+  if (command === 'obs_action') { await obsService.action(args.action, args.settings || {}); return 'Acción enviada a OBS.'; }
   if (command === 'apply_key_config') return null;
   throw new Error(`Comando no implementado en Electron: ${command}`);
 }
@@ -453,8 +597,11 @@ app.whenReady().then(() => {
     dataRoot,
     log: appendLog,
     feedback: (value) => { sendEvent({ type: 'plugin-feedback', ...value }); void applyPluginFeedback(value); },
+    settingsChanged: (value) => sendEvent({ type: 'plugin-settings', ...value }),
+    runtimeStatus: (value) => sendEvent({ type: 'plugin-runtime-status', ...value }),
     openExternal: (url) => shell.openExternal(url),
   });
+  obsService = new ObsService({ onEvent: sendEvent, log: appendLog });
   if (smokeTest) {
     appendLog('smoke-test', `Arranque empaquetado correcto en ${dataRoot}`);
     app.exit(0);
@@ -478,5 +625,5 @@ app.whenReady().then(() => {
 app.on('second-instance', () => {
   if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
 });
-app.on('before-quit', () => { pluginService?.stopAll(); if (worker?.pid) { void workerRequest('shutdown', {}, 1000); setTimeout(() => worker?.kill(), 1100).unref(); } });
+app.on('before-quit', () => { shuttingDown = true; if (reconnectTimer) clearTimeout(reconnectTimer); for (const inspector of propertyInspectorWindows.values()) inspector.destroy(); propertyInspectorWindows.clear(); pluginService?.stopAll(); obsService?.disconnect(); if (worker?.pid) { void workerRequest('shutdown', {}, 1000); setTimeout(() => worker?.kill(), 1100).unref(); } });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

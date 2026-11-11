@@ -2,9 +2,11 @@
 
 ## OBS Studio
 
-Implementado: conexión WebSocket 5.x, autenticación challenge/salt y solicitud `GetVersion`, con timeout de cinco segundos. Solo se aceptan `localhost`, `127.0.0.1` o `wss://` para reducir transmisiones accidentales. La contraseña de prueba no se persiste.
+Implementado en Electron: conexión WebSocket 5.x persistente durante la sesión, autenticación challenge/salt, `GetVersion`, eventos, timeout de cinco segundos y cierre controlado. Solo se aceptan hosts locales o `wss://` para reducir transmisiones accidentales. La contraseña no se persiste.
 
-Pendiente: estados de stream/grabación, escenas, fuentes, eventos y asignación a teclas. Se usarán solicitudes y eventos del protocolo oficial.
+Acciones reales disponibles para Drag & Drop: cambiar escena, iniciar/detener streaming, iniciar/detener grabación y pausar/reanudar grabación. Las teclas físicas ejecutan estas solicitudes contra la sesión conectada. También existe soporte de backend para `SetSceneItemEnabled`; falta exponer un selector que obtenga identificadores desde OBS.
+
+Pendiente: reconexión autenticada entre reinicios, selectores dinámicos de escenas/fuentes y representación visual completa de estados de stream/grabación.
 
 Referencia: https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md
 

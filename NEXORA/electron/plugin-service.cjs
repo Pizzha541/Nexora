@@ -95,6 +95,9 @@ class StreamDeckRuntime {
     this.socket = null;
     this.child = null;
     this.contexts = new Map();
+    this.propertyInspectors = new Map();
+    this.globalSettings = {};
+    this.port = null;
     this.registration = null;
   }
 
@@ -108,6 +111,7 @@ class StreamDeckRuntime {
       this.server.once('error', (error) => { clearTimeout(timeout); reject(error); });
       this.server.once('listening', () => {
         const port = this.server.address().port;
+        this.port = port;
         this.callbacks.log('plugin-runtime', `${this.plugin.id}: host WebSocket en 127.0.0.1:${port}`);
         try { this.launch(port); }
         catch (error) { clearTimeout(timeout); reject(error); }
@@ -116,13 +120,28 @@ class StreamDeckRuntime {
         this.callbacks.log('plugin-runtime', `${this.plugin.id}: conexión WebSocket recibida`);
         socket.on('message', (data) => this.onMessage(socket, data));
         socket.on('error', (error) => this.callbacks.log('plugin-runtime', `${this.plugin.id}: ${error.message}`));
-        socket.on('close', () => { if (this.socket === socket) this.socket = null; });
+        socket.on('close', () => { if (this.socket === socket) { this.socket = null; this.callbacks.runtimeStatus?.({ pluginId: this.plugin.id, connected: false }); } });
         const registered = (data) => {
           try {
             const message = JSON.parse(String(data));
+            if (message.event === 'registerPropertyInspector') {
+              const context = String(message.uuid || '');
+              const current = this.contexts.get(context);
+              if (!current) return;
+              socket.off('message', registered);
+              this.propertyInspectors.set(context, socket);
+              socket.send(JSON.stringify({ action: current.actionId, event: 'didReceiveSettings', context, device: 'nexora-displaypad', payload: { settings: current.settings, coordinates: current.coordinates, isInMultiAction: false } }));
+              this.send({ action: current.actionId, event: 'propertyInspectorDidAppear', context, device: 'nexora-displaypad' });
+              socket.once('close', () => {
+                if (this.propertyInspectors.get(context) === socket) this.propertyInspectors.delete(context);
+                if (this.socket?.readyState === 1) this.send({ action: current.actionId, event: 'propertyInspectorDidDisappear', context, device: 'nexora-displaypad' });
+              });
+              return;
+            }
             if (message.event !== 'registerPlugin' || message.uuid !== this.plugin.id) return;
             socket.off('message', registered);
             this.socket = socket;
+            this.callbacks.runtimeStatus?.({ pluginId: this.plugin.id, connected: true });
             this.callbacks.log('plugin-runtime', `${this.plugin.id}: registro confirmado`);
             clearTimeout(timeout);
             this.send({ event: 'deviceDidConnect', device: 'nexora-displaypad', deviceInfo: { name: 'Mountain DisplayPad', size: { columns: 6, rows: 2 }, type: 0 } });
@@ -172,20 +191,80 @@ class StreamDeckRuntime {
   onMessage(socket, data) {
     let message;
     try { message = JSON.parse(String(data)); } catch { return; }
+    const inspectorContext = [...this.propertyInspectors.entries()].find(([, candidate]) => candidate === socket)?.[0];
+    if (inspectorContext) {
+      this.onPropertyInspectorMessage(inspectorContext, socket, message);
+      return;
+    }
     const context = message.context;
     if (message.event === 'getSettings' && context) {
       const current = this.contexts.get(context);
       socket.send(JSON.stringify({ action: current?.actionId || '', event: 'didReceiveSettings', context, device: 'nexora-displaypad', payload: { settings: current?.settings || {}, coordinates: current?.coordinates || { column: 0, row: 0 }, isInMultiAction: false } }));
     } else if (message.event === 'setSettings' && context) {
       const current = this.contexts.get(context);
-      if (current) current.settings = message.payload || {};
+      if (current) {
+        current.settings = structuredClone(message.payload || {});
+        this.callbacks.settingsChanged?.({ pluginId: this.plugin.id, contextId: context, keyIndex: current.keyIndex, settings: current.settings });
+        const inspector = this.propertyInspectors.get(context);
+        if (inspector?.readyState === 1) inspector.send(JSON.stringify({ action: current.actionId, event: 'didReceiveSettings', context, device: 'nexora-displaypad', payload: { settings: current.settings, coordinates: current.coordinates, isInMultiAction: false } }));
+      }
     } else if (message.event === 'setTitle' || message.event === 'setImage' || message.event === 'setState' || message.event === 'showOk' || message.event === 'showAlert') {
       this.callbacks.feedback({ pluginId: this.plugin.id, keyIndex: this.contexts.get(context)?.keyIndex, ...message });
     } else if (message.event === 'openUrl' && /^https?:\/\//i.test(message.payload?.url || '')) {
       void this.callbacks.openExternal(message.payload.url);
     } else if (message.event === 'logMessage') {
       this.callbacks.log('plugin-message', `${this.plugin.id}: ${message.payload?.message || ''}`);
+    } else if (message.event === 'sendToPropertyInspector' && context) {
+      const inspector = this.propertyInspectors.get(context);
+      if (inspector?.readyState === 1) inspector.send(JSON.stringify({ action: message.action, event: 'sendToPropertyInspector', context, payload: message.payload || {} }));
     }
+  }
+
+  onPropertyInspectorMessage(context, socket, message) {
+    const current = this.contexts.get(context);
+    if (!current) return;
+    if (message.event === 'getSettings') {
+      socket.send(JSON.stringify({ action: current.actionId, event: 'didReceiveSettings', context, device: 'nexora-displaypad', payload: { settings: current.settings, coordinates: current.coordinates, isInMultiAction: false } }));
+    } else if (message.event === 'setSettings') {
+      current.settings = structuredClone(message.payload || {});
+      this.callbacks.settingsChanged?.({ pluginId: this.plugin.id, contextId: context, keyIndex: current.keyIndex, settings: current.settings });
+      this.send({ action: current.actionId, event: 'didReceiveSettings', context, device: 'nexora-displaypad', payload: { settings: current.settings, coordinates: current.coordinates, isInMultiAction: false } });
+    } else if (message.event === 'sendToPlugin') {
+      this.send({ action: current.actionId, event: 'sendToPlugin', context, payload: message.payload || {} });
+    } else if (message.event === 'getGlobalSettings') {
+      socket.send(JSON.stringify({ event: 'didReceiveGlobalSettings', payload: { settings: this.globalSettings } }));
+    } else if (message.event === 'setGlobalSettings') {
+      this.globalSettings = structuredClone(message.payload || {});
+      this.send({ event: 'didReceiveGlobalSettings', payload: { settings: this.globalSettings } });
+    } else if (message.event === 'openUrl' && /^https?:\/\//i.test(message.payload?.url || '')) {
+      void this.callbacks.openExternal(message.payload.url);
+    }
+  }
+
+  async prepareInspector(actionId, settings = {}, contextId, keyIndex = 0) {
+    await this.start();
+    const action = this.plugin.actions.find((item) => item.id === actionId);
+    if (!action?.propertyInspectorPath) throw new Error('Esta acción no declara Property Inspector.');
+    const context = contextId || crypto.randomUUID();
+    const coordinates = { column: keyIndex % 6, row: Math.floor(keyIndex / 6) };
+    this.contexts.set(context, { actionId, settings: structuredClone(settings), coordinates, keyIndex });
+    const root = inside(this.callbacks.pluginsRoot, this.plugin.installRelativePath);
+    const file = inside(root, action.propertyInspectorPath);
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error('No se encuentra el Property Inspector declarado.');
+    const info = {
+      application: { font: 'Segoe UI', language: 'es', platform: 'windows', platformVersion: '10', version: '7.1' },
+      colors: { buttonMouseOverBackgroundColor: '#24202d', buttonPressedBackgroundColor: '#312542', buttonPressedBorderColor: '#8b5cf6', buttonPressedTextColor: '#ffffff', highlightColor: '#8b5cf6' },
+      devicePixelRatio: 1,
+      devices: [{ id: 'nexora-displaypad', name: 'Mountain DisplayPad', size: { columns: 6, rows: 2 }, type: 0 }],
+      plugin: { uuid: this.plugin.id, version: this.plugin.version },
+    };
+    const actionInfo = { action: actionId, context, device: 'nexora-displaypad', payload: { settings, coordinates, state: 0, isInMultiAction: false, controller: 'Keypad' } };
+    return { file, port: this.port, context, info, actionInfo };
+  }
+
+  closeInspector(context) {
+    try { this.propertyInspectors.get(context)?.close(); } catch {}
+    this.propertyInspectors.delete(context);
   }
 
   async execute(actionId, settings = {}, contextId, keyIndex = 0) {
@@ -204,24 +283,48 @@ class StreamDeckRuntime {
   }
 
   stop() {
+    for (const inspector of this.propertyInspectors.values()) { try { inspector.close(); } catch {} }
+    this.propertyInspectors.clear();
     try { this.socket?.close(); } catch {}
     try { this.server?.close(); } catch {}
     try { this.child?.kill(); } catch {}
     this.socket = null;
     this.server = null;
     this.child = null;
+    this.port = null;
   }
 }
 
-function createPluginService({ dataRoot, log, feedback, openExternal, runtimeExecutable }) {
+function createPluginService({ dataRoot, log, feedback, settingsChanged, runtimeStatus, openExternal, runtimeExecutable }) {
   const pluginsRoot = path.join(dataRoot, 'plugins');
   const installsRoot = path.join(pluginsRoot, 'installed');
   const registryFile = path.join(pluginsRoot, 'registry.json');
   const runtimes = new Map();
   fs.mkdirSync(installsRoot, { recursive: true });
 
-  const list = () => readRegistry(registryFile);
   const save = (plugins) => writeAtomic(registryFile, plugins);
+  const list = () => {
+    const registry = readRegistry(registryFile);
+    let changed = false;
+    for (const plugin of registry) {
+      if (plugin.ecosystem !== 'streamdeck' || !plugin.installRelativePath) continue;
+      const root = inside(pluginsRoot, plugin.installRelativePath);
+      const manifestFile = path.join(root, 'manifest.json');
+      if (!fs.existsSync(manifestFile)) continue;
+      let manifest;
+      try { manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8')); } catch { continue; }
+      const manifestActions = Array.isArray(manifest.Actions) ? manifest.Actions : [];
+      plugin.actions = (plugin.actions || []).map((action) => {
+        const declared = manifestActions.find((candidate) => String(candidate.UUID || '') === action.id);
+        const propertyInspectorPath = declared?.PropertyInspectorPath || manifest.PropertyInspectorPath;
+        if (!propertyInspectorPath || action.propertyInspectorPath) return action;
+        changed = true;
+        return { ...action, configurable: true, propertyInspectorPath: normalizeArchivePath(propertyInspectorPath) };
+      });
+    }
+    if (changed) save(registry);
+    return registry;
+  };
   const find = (id) => list().find((plugin) => plugin.id === id);
 
   function inspectPackage(bytes, options = {}) {
@@ -253,7 +356,17 @@ function createPluginService({ dataRoot, log, feedback, openExternal, runtimeExe
       : (manifest.entrypoints?.['win-x64']?.executable || '');
     const actions = ecosystem === 'streamdeck' ? (manifest.Actions || [])
       .filter((action) => !action.Controllers || action.Controllers.includes('Keypad'))
-      .map((action) => ({ id: String(action.UUID || ''), name: String(action.Name || action.UUID || 'Acción'), description: String(action.Tooltip || ''), icon: action.States?.[0]?.Image || action.Icon, configurable: Boolean(action.PropertyInspectorPath || manifest.PropertyInspectorPath) }))
+      .map((action) => {
+        const propertyInspectorPath = action.PropertyInspectorPath || manifest.PropertyInspectorPath;
+        return {
+          id: String(action.UUID || ''),
+          name: String(action.Name || action.UUID || 'Acción'),
+          description: String(action.Tooltip || ''),
+          icon: action.States?.[0]?.Image || action.Icon,
+          configurable: Boolean(propertyInspectorPath),
+          propertyInspectorPath: propertyInspectorPath ? normalizeArchivePath(propertyInspectorPath) : undefined,
+        };
+      })
       .filter((action) => action.id) : [];
     const runnable = ecosystem === 'streamdeck' && ['.js', '.cjs', '.mjs'].includes(path.extname(entrypoint).toLowerCase());
     const permissions = ecosystem === 'streamdeck'
@@ -341,11 +454,26 @@ function createPluginService({ dataRoot, log, feedback, openExternal, runtimeExe
     if (plugin.compatibility !== 'experimental-runtime') throw new Error('Este plugin solo puede inspeccionarse; su runtime todavía no es compatible.');
     let runtime = runtimes.get(id);
     if (!runtime) {
-      runtime = new StreamDeckRuntime(plugin, { pluginsRoot, log, feedback, openExternal, runtimeExecutable });
+      runtime = new StreamDeckRuntime(plugin, { pluginsRoot, log, feedback, settingsChanged, runtimeStatus, openExternal, runtimeExecutable });
       runtimes.set(id, runtime);
     }
     return runtime.execute(actionId, settings || {}, contextId, Number(keyIndex || 0));
   }
+
+  async function openInspector(id, actionId, settings, contextId, keyIndex) {
+    const plugin = find(id);
+    if (!plugin) throw new Error('Plugin no instalado.');
+    if (!plugin.executionApproved) throw new Error('Autoriza la ejecución antes de abrir su Property Inspector.');
+    if (plugin.compatibility !== 'experimental-runtime') throw new Error('El Property Inspector requiere un runtime Stream Deck compatible.');
+    let runtime = runtimes.get(id);
+    if (!runtime) {
+      runtime = new StreamDeckRuntime(plugin, { pluginsRoot, log, feedback, settingsChanged, runtimeStatus, openExternal, runtimeExecutable });
+      runtimes.set(id, runtime);
+    }
+    return runtime.prepareInspector(actionId, settings || {}, contextId, Number(keyIndex || 0));
+  }
+
+  function closeInspector(id, context) { runtimes.get(id)?.closeInspector(context); }
 
   function uninstall(id, confirmed) {
     if (!confirmed) throw new Error('La desinstalación requiere confirmación explícita.');
@@ -371,7 +499,7 @@ function createPluginService({ dataRoot, log, feedback, openExternal, runtimeExe
 
   function stopAll() { for (const runtime of runtimes.values()) runtime.stop(); runtimes.clear(); }
 
-  return { catalog: () => structuredClone(CATALOG), list, install, approve, execute, uninstall, icon, stopAll };
+  return { catalog: () => structuredClone(CATALOG), list, install, approve, execute, openInspector, closeInspector, uninstall, icon, stopAll };
 }
 
 module.exports = { createPluginService };

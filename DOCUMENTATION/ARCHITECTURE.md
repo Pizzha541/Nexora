@@ -29,3 +29,15 @@ La aplicación principal pasa a Electron para adoptar sin reinterpretaciones el 
 
 El árbol `src-tauri` se conserva durante la migración para no perder la implementación OBS, pruebas de almacenamiento ni el instalador de contingencia. No es el controlador físico preferido mientras se completa la paridad.
 
+## Motor reactivo de Electron
+
+La interfaz aplica cada mutación primero sobre el estado React y usa una única función de commit para perfiles y teclas. El perfil modificado se persiste tras 350 ms sin cambios; las escrituras son atómicas, hacen `fsync` y conservan una copia `.bak`. Las configuraciones de Initial Screen usan el mismo patrón con 400 ms de debounce.
+
+El flujo activo es:
+
+`React → commitProfile → autosave Electron + cola USB → evento de runtime → React`
+
+Las actualizaciones USB por tecla se agrupan durante 90 ms y se serializan. Si llegan varias modificaciones de una misma tecla solo se transfiere el estado final. La página deseada permanece en memoria durante una desconexión y se envía completa después de reconectar. El botón «Aplicar al DisplayPad» permanece como resincronización manual y recuperación, no como requisito habitual.
+
+`src/lib/realtime.ts` contiene las mutaciones puras que comparten la UI y las pruebas: reemplazo, intercambio/copia de teclas, movimiento seguro de carpetas, reordenación de perfiles, actualización de settings de plugins y validación de recursos visuales.
+

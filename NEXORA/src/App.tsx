@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Boxes,
@@ -43,6 +43,7 @@ import {
   saveProfile,
   saveBackendMacro,
   setActiveProfile,
+  setProfileOrder,
   setDeviceMode,
   testObsConnection,
   applyHardwareKey,
@@ -52,12 +53,29 @@ import {
   readVisualAsset,
   saveVisualSettings,
   executePluginAction,
+  executeObsAction,
+  openPluginPropertyInspector,
   installCatalogPlugin,
   installPluginPackage,
   setPluginExecutionApproval,
   uninstallPlugin,
 } from "./lib/backend";
 import type { BootstrapState, ButtonEvent, DeviceMode, FolderNode, InstalledPlugin, KeyConfig, MacroDefinition, PluginActionDefinition, PluginCatalogEntry, Profile, VisualAsset, VisualSettings } from "./types";
+import {
+  isSupportedVisualFile,
+  keysForPage,
+  moveProfileKey,
+  moveFolder,
+  NEXORA_ASSET_MIME,
+  NEXORA_FOLDER_MIME,
+  NEXORA_KEY_MIME,
+  NEXORA_NATIVE_ACTION_MIME,
+  NEXORA_PLUGIN_ACTION_MIME,
+  NEXORA_PROFILE_MIME,
+  reorderProfiles,
+  updateProfileKey,
+  updatePluginSettings,
+} from "./lib/realtime";
 
 type Section = "dashboard" | "displaypad" | "profiles" | "library" | "initial" | "macros" | "integrations" | "plugins" | "settings" | "about";
 const bundledAsset = (name: string) => `${import.meta.env.BASE_URL}assets/${name}`;
@@ -157,29 +175,89 @@ function AssetVisual({ assetId, alt = "" }: { assetId: string; alt?: string }) {
 }
 
 type PluginDrop = { pluginId: string; actionId: string; settings: Record<string, unknown> };
+type NativeActionDrop = { kind: "obs"; value: string; name: string; settings?: Record<string, unknown> };
+type RuntimeKeyFeedback = { title?: string; image?: string; state?: number; disconnected?: boolean };
 
-function KeyGrid({ keys, selected, onSelect, onPluginDrop }: { keys: KeyConfig[]; selected: number; onSelect: (key: number) => void; onPluginDrop?: (key: number, value: PluginDrop) => void }) {
+function KeyGrid({ keys, selected, runtimeFeedback = {}, onSelect, onPluginDrop, onNativeDrop, onKeyMove, onAssetDrop, onFileDrop }: {
+  keys: KeyConfig[];
+  selected: number;
+  runtimeFeedback?: Record<number, RuntimeKeyFeedback>;
+  onSelect: (key: number) => void;
+  onPluginDrop?: (key: number, value: PluginDrop) => void;
+  onNativeDrop?: (key: number, value: NativeActionDrop) => void;
+  onKeyMove?: (source: number, target: number, copy: boolean) => void;
+  onAssetDrop?: (key: number, assetId: string) => void;
+  onFileDrop?: (key: number, files: FileList) => void;
+}) {
+  const [dropTarget, setDropTarget] = useState<number | null>(null);
+  const [dropInvalid, setDropInvalid] = useState(false);
+  const acceptsDrop = (event: React.DragEvent) => event.dataTransfer.types.some((type) =>
+    [NEXORA_PLUGIN_ACTION_MIME, NEXORA_NATIVE_ACTION_MIME, NEXORA_KEY_MIME, NEXORA_ASSET_MIME, "Files"].includes(type));
+
   return (
     <div className="key-grid" aria-label="Teclas del DisplayPad">
-      {keys.map((key) => (
+      {keys.map((key) => {
+        const feedback = runtimeFeedback[key.index];
+        return (
         <button
           type="button"
           key={key.index}
-          className={`device-key ${selected === key.index ? "selected" : ""}`}
+          draggable
+          className={`device-key ${selected === key.index ? "selected" : ""} ${dropTarget === key.index ? (dropInvalid ? "drop-invalid" : "drop-valid") : ""}`}
           style={{ "--key-color": key.color } as React.CSSProperties}
           onClick={() => onSelect(key.index)}
-          onDragOver={(event) => { if (onPluginDrop && event.dataTransfer.types.includes("application/x-nexora-plugin-action")) event.preventDefault(); }}
-          onDrop={(event) => {
-            if (!onPluginDrop) return;
+          onDragStart={(event) => {
+            event.dataTransfer.effectAllowed = "copyMove";
+            event.dataTransfer.setData(NEXORA_KEY_MIME, JSON.stringify({ index: key.index }));
+          }}
+          onDragEnter={(event) => {
+            if (!acceptsDrop(event)) return;
             event.preventDefault();
-            try { onPluginDrop(key.index, JSON.parse(event.dataTransfer.getData("application/x-nexora-plugin-action")) as PluginDrop); } catch { /* Paquete de arrastre ajeno. */ }
+            const invalidFiles = event.dataTransfer.types.includes("Files") && !onFileDrop;
+            setDropInvalid(invalidFiles);
+            setDropTarget(key.index);
+          }}
+          onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
+          onDragOver={(event) => {
+            if (!acceptsDrop(event)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = event.ctrlKey ? "copy" : "move";
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDropTarget(null);
+            setDropInvalid(false);
+            try {
+              if (event.dataTransfer.files.length && onFileDrop) {
+                onFileDrop(key.index, event.dataTransfer.files);
+                return;
+              }
+              const plugin = event.dataTransfer.getData(NEXORA_PLUGIN_ACTION_MIME);
+              if (plugin && onPluginDrop) {
+                onPluginDrop(key.index, JSON.parse(plugin) as PluginDrop);
+                return;
+              }
+              const nativeAction = event.dataTransfer.getData(NEXORA_NATIVE_ACTION_MIME);
+              if (nativeAction && onNativeDrop) {
+                onNativeDrop(key.index, JSON.parse(nativeAction) as NativeActionDrop);
+                return;
+              }
+              const assetId = event.dataTransfer.getData(NEXORA_ASSET_MIME);
+              if (assetId && onAssetDrop) {
+                onAssetDrop(key.index, assetId);
+                return;
+              }
+              const source = event.dataTransfer.getData(NEXORA_KEY_MIME);
+              if (source && onKeyMove) onKeyMove(Number((JSON.parse(source) as { index: number }).index), key.index, event.ctrlKey);
+            } catch { setDropInvalid(true); }
           }}
         >
           <span className="key-glow" />
-          <span className="key-content">{key.iconPath ? <AssetVisual assetId={key.iconPath} alt={key.name} /> : (key.text || key.index + 1)}</span>
+          <span className="key-content">{feedback?.image ? <img className="asset-visual" src={feedback.image} alt={feedback.title || key.name} /> : key.iconPath ? <AssetVisual assetId={key.iconPath} alt={key.name} /> : (feedback?.title || key.text || key.index + 1)}</span>
           <small>{key.name}</small>
+          {feedback?.disconnected && <span className="runtime-offline">offline</span>}
         </button>
-      ))}
+      );})}
     </div>
   );
 }
@@ -232,6 +310,7 @@ function KeyEditor({ keyConfig, assets, hardwareReady, onImport, onApplyHardware
           <option value="profile">Cambiar perfil</option>
           <option value="folder">Abrir carpeta</option>
           <option value="macro">Ejecutar macro</option>
+          <option value="obs">Acción de OBS</option>
           <option value="plugin" disabled={action.kind !== "plugin"}>Acción de Plugin Hub</option>
         </select>
       </label>
@@ -268,7 +347,10 @@ function LibraryPanel({ assets, onImport, onAssign }: { assets: VisualAsset[]; o
         {message && <strong>{message}</strong>}
       </div>
       <div className="asset-grid">
-        {assets.map((asset) => <article className="asset-card glass-card" key={asset.id}>
+        {assets.map((asset) => <article className="asset-card glass-card" key={asset.id} draggable onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = "copy";
+          event.dataTransfer.setData(NEXORA_ASSET_MIME, asset.id);
+        }}>
           <div className="asset-preview"><AssetVisual assetId={asset.id} alt={asset.name} />{asset.animated && <span>GIF</span>}</div>
           <h3>{asset.name}</h3><small>{(asset.sizeBytes / 1024).toFixed(1)} KB · {asset.mimeType.replace("image/", "").toUpperCase()}</small>
           <button type="button" className="secondary-button" onClick={() => onAssign(asset)}>Asignar a tecla seleccionada</button>
@@ -295,7 +377,19 @@ function PanoramaPreview({ assetId }: { assetId?: string }) {
 function InitialScreenPanel({ assets, settings, hardwareReady, onSave, onApply }: { assets: VisualAsset[]; settings: VisualSettings; hardwareReady: boolean; onSave: (settings: VisualSettings) => Promise<void>; onApply: () => Promise<string> }) {
   const [draft, setDraft] = useState(settings);
   const [message, setMessage] = useState("");
-  useEffect(() => setDraft(settings), [settings]);
+  const lastPersisted = useRef(JSON.stringify(settings));
+  const onSaveRef = useRef(onSave);
+  useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
+  useEffect(() => { lastPersisted.current = JSON.stringify(settings); setDraft(settings); }, [settings]);
+  useEffect(() => {
+    const signature = JSON.stringify(draft);
+    if (signature === lastPersisted.current) return;
+    const timer = window.setTimeout(() => {
+      lastPersisted.current = signature;
+      void onSaveRef.current(draft).then(() => setMessage("Configuración guardada automáticamente.")).catch((error) => setMessage(error instanceof Error ? error.message : String(error)));
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [draft]);
   const save = async () => { await onSave(draft); setMessage("Configuración visual guardada."); };
   return <div className="section-stack">
     <div className="section-title"><span><em>05</em> Initial Screen</span><h1>Una bienvenida en doce pantallas</h1><p>Configura una imagen o GIF inicial y un salvapantallas opcional. El banner NEXORA se usa cuando no eliges otro recurso.</p></div>
@@ -322,13 +416,14 @@ function InitialScreenPanel({ assets, settings, hardwareReady, onSave, onApply }
   </div>;
 }
 
-function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign }: {
+function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign, onOpenInspector }: {
   plugins: InstalledPlugin[];
   catalog: PluginCatalogEntry[];
   keys: KeyConfig[];
   selectedKey: number;
   onRefresh: () => Promise<void>;
   onAssign: (key: number, value: PluginDrop) => Promise<void>;
+  onOpenInspector?: (plugin: InstalledPlugin, action: PluginActionDefinition, key: number, settings: Record<string, unknown>) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
   const [ecosystem, setEcosystem] = useState("all");
@@ -370,7 +465,7 @@ function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign
       <label className="secondary-button plugin-import"><Upload size={16} /> Importar paquete<input type="file" accept=".streamDeckPlugin,.macroDeckPlugin,.zip" onChange={(event) => { void importPackage(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
     </section>
     {message && <p className={`device-message ${/error|no |inválid|fall/i.test(message) ? "error" : "ok"}`}>{message}</p>}
-    <section className="glass-card plugin-drop-panel"><div><span className="eyebrow">ASIGNACIÓN RÁPIDA</span><h2>Arrastra una acción hacia una tecla</h2><p>La configuración JSON se guarda de forma independiente en cada botón.</p></div><div className="plugin-drop-grid">{keys.map((key) => <button type="button" key={key.index} className={selectedKey === key.index ? "selected" : ""} onDragOver={(event) => { if (event.dataTransfer.types.includes("application/x-nexora-plugin-action")) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); try { void onAssign(key.index, JSON.parse(event.dataTransfer.getData("application/x-nexora-plugin-action")) as PluginDrop).then(() => setMessage(`Acción asignada a la tecla ${key.index + 1}.`)); } catch { setMessage("La acción arrastrada no es válida."); } }}><strong>{key.index + 1}</strong><span>{key.name}</span></button>)}</div></section>
+    <section className="glass-card plugin-drop-panel"><div><span className="eyebrow">ASIGNACIÓN RÁPIDA</span><h2>Arrastra una acción hacia una tecla</h2><p>La configuración JSON se guarda de forma independiente en cada botón.</p></div><div className="plugin-drop-grid">{keys.map((key) => <button type="button" key={key.index} className={selectedKey === key.index ? "selected" : ""} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_PLUGIN_ACTION_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); try { void onAssign(key.index, JSON.parse(event.dataTransfer.getData(NEXORA_PLUGIN_ACTION_MIME)) as PluginDrop).then(() => setMessage(`Acción asignada a la tecla ${key.index + 1}.`)); } catch { setMessage("La acción arrastrada no es válida."); } }}><strong>{key.index + 1}</strong><span>{key.name}</span></button>)}</div></section>
     <div className="hub-heading"><h2>Catálogo gratuito verificado</h2><span>{catalog.length} disponible</span></div>
     <div className="plugin-grid">
       {catalog.filter((item) => matches(item.name, item.ecosystem)).map((item) => {
@@ -394,7 +489,18 @@ function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign
           const actionKey = `${plugin.id}:${action.id}`;
           let dragSettings: Record<string, unknown> = {};
           try { dragSettings = parseSettings(actionKey); } catch {}
-          return <div className="plugin-action-row" draggable key={action.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-nexora-plugin-action", JSON.stringify({ pluginId: plugin.id, actionId: action.id, settings: dragSettings })); }}><div><strong>{action.name}</strong><p>{action.description || action.id}</p></div><textarea aria-label={`Configuración de ${action.name}`} value={settings[actionKey] ?? "{}"} onChange={(event) => setSettings((current) => ({ ...current, [actionKey]: event.target.value }))} spellCheck={false} /><button type="button" className="secondary-button" onClick={() => void assign(plugin, action)} title={`Asignar a tecla ${selectedKey + 1}`}>Tecla {selectedKey + 1}</button><button type="button" className="secondary-button" disabled={!plugin.executionApproved || busy === actionKey} onClick={() => { let parsed: Record<string, unknown>; try { parsed = parseSettings(actionKey); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); return; } void task(actionKey, () => executePluginAction(plugin.id, action.id, parsed, selectedKey), `Acción “${action.name}” ejecutada en simulación.`); }}><Play size={14} /> Probar</button></div>;
+          return <div className="plugin-action-row" draggable key={action.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(NEXORA_PLUGIN_ACTION_MIME, JSON.stringify({ pluginId: plugin.id, actionId: action.id, settings: dragSettings })); }}>
+            <div><strong>{action.name}</strong><p>{action.description || action.id}</p></div>
+            <textarea aria-label={`Configuración de ${action.name}`} value={settings[actionKey] ?? "{}"} onChange={(event) => setSettings((current) => ({ ...current, [actionKey]: event.target.value }))} spellCheck={false} />
+            <button type="button" className="secondary-button" onClick={() => void assign(plugin, action)} title={`Asignar a tecla ${selectedKey + 1}`}>Tecla {selectedKey + 1}</button>
+            {action.configurable && <button type="button" className="secondary-button" disabled={!plugin.executionApproved || busy === `pi:${actionKey}`} onClick={() => {
+              let parsed: Record<string, unknown>;
+              try { parsed = parseSettings(actionKey); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); return; }
+              if (!onOpenInspector) return;
+              void task(`pi:${actionKey}`, () => onOpenInspector(plugin, action, selectedKey, parsed), "Property Inspector abierto; sus cambios se guardan en tiempo real.");
+            }}><Settings size={14} /> Configurar</button>}
+            <button type="button" className="secondary-button" disabled={!plugin.executionApproved || busy === actionKey} onClick={() => { let parsed: Record<string, unknown>; try { parsed = parseSettings(actionKey); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); return; } void task(actionKey, () => executePluginAction(plugin.id, action.id, parsed, selectedKey), `Acción “${action.name}” ejecutada en simulación.`); }}><Play size={14} /> Probar</button>
+          </div>;
         }) : <p className="empty-actions">El manifiesto no expone acciones. Macro Deck las anuncia al conectarse a su runtime, que aún no se ejecuta en esta etapa.</p>}</div>
       </article>)}
       {!plugins.length && <div className="glass-card empty-plugins"><Boxes size={34} /><h2>No hay plugins instalados</h2><p>Instala la muestra verificada o importa un paquete externo. Importar nunca autoriza su ejecución automáticamente.</p></div>}
@@ -412,6 +518,12 @@ function DisplayPadPanel({
   onDeleteFolder,
   onApplyPage,
   onPluginDrop,
+  onNativeDrop,
+  onKeyMove,
+  onAssetDrop,
+  onFileDrop,
+  onFolderMove,
+  runtimeFeedback,
   hardwareReady,
 }: {
   profile: Profile;
@@ -423,6 +535,12 @@ function DisplayPadPanel({
   onDeleteFolder: () => void;
   onApplyPage: (keys: KeyConfig[]) => Promise<string>;
   onPluginDrop: (key: number, value: PluginDrop) => void;
+  onNativeDrop: (key: number, value: NativeActionDrop) => void;
+  onKeyMove: (source: number, target: number, copy: boolean) => void;
+  onAssetDrop: (key: number, assetId: string) => void;
+  onFileDrop: (key: number, files: FileList) => void;
+  onFolderMove: (sourceId: string, targetParentId: string | null) => void;
+  runtimeFeedback: Record<number, RuntimeKeyFeedback>;
   hardwareReady: boolean;
 }) {
   const folder = findFolder(profile.folders, selectedFolderId);
@@ -433,9 +551,9 @@ function DisplayPadPanel({
     <div className="section-stack">
       <div className="section-title"><span><em>01</em> DisplayPad</span><h1>Doce teclas, niveles ilimitados</h1><p>La raíz y cada carpeta mantienen doce teclas independientes. La profundidad está limitada a ocho niveles para evitar ciclos y navegación incontrolable.</p></div>
       <section className="device-panel glass-card">
-        <div className="panel-heading"><div><span className="eyebrow">{folder ? "CARPETA" : "PERFIL"}</span><h2>{folder?.name ?? profile.name}</h2></div><div className="folder-actions"><button type="button" className="primary-button" disabled={!hardwareReady} onClick={() => { if (!window.confirm("¿Enviar esta página completa al DisplayPad?")) return; setHardwareMessage("Enviando página…"); void onApplyPage(keys).then(setHardwareMessage).catch((error) => setHardwareMessage(error instanceof Error ? error.message : String(error))); }}><MonitorUp size={16} /> Aplicar al DisplayPad</button><button type="button" className="secondary-button" onClick={onCreateFolder}><FolderTree size={16} /> Nueva {folder ? "subcarpeta" : "carpeta"}</button>{folder && <button type="button" className="danger-button" onClick={onDeleteFolder}><Trash2 size={16} /> Eliminar carpeta</button>}</div></div>
-        <div className="folder-strip"><button type="button" className={!folder ? "active" : ""} onClick={() => onNavigate(null)}><FolderTree size={14} /> Raíz</button>{visibleFolders.map((item) => <button type="button" key={item.id} className={selectedFolderId === item.id ? "active" : ""} onClick={() => onNavigate(item.id)}><FolderTree size={14} /> {item.name}<small>{item.children.length} subcarpetas</small></button>)}</div>
-        <KeyGrid keys={keys} selected={selectedKey} onSelect={onSelectKey} onPluginDrop={onPluginDrop} />
+        <div className="panel-heading"><div><span className="eyebrow">{folder ? "CARPETA" : "PERFIL"}</span><h2 draggable={Boolean(folder)} onDragStart={(event) => { if (folder) event.dataTransfer.setData(NEXORA_FOLDER_MIME, folder.id); }}>{folder?.name ?? profile.name}</h2></div><div className="folder-actions"><button type="button" className="primary-button" disabled={!hardwareReady} onClick={() => { if (!window.confirm("¿Enviar esta página completa al DisplayPad?")) return; setHardwareMessage("Enviando página…"); void onApplyPage(keys).then(setHardwareMessage).catch((error) => setHardwareMessage(error instanceof Error ? error.message : String(error))); }}><MonitorUp size={16} /> Aplicar al DisplayPad</button><button type="button" className="secondary-button" onClick={onCreateFolder}><FolderTree size={16} /> Nueva {folder ? "subcarpeta" : "carpeta"}</button>{folder && <button type="button" className="danger-button" onClick={onDeleteFolder}><Trash2 size={16} /> Eliminar carpeta</button>}</div></div>
+        <div className="folder-strip"><button type="button" className={!folder ? "active" : ""} onClick={() => onNavigate(null)} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_FOLDER_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); const source = event.dataTransfer.getData(NEXORA_FOLDER_MIME); if (source) onFolderMove(source, null); }}><FolderTree size={14} /> Raíz</button>{visibleFolders.map((item) => <button type="button" draggable key={item.id} className={selectedFolderId === item.id ? "active" : ""} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData(NEXORA_FOLDER_MIME, item.id); }} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_FOLDER_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); const source = event.dataTransfer.getData(NEXORA_FOLDER_MIME); if (source) onFolderMove(source, item.id); }} onClick={() => onNavigate(item.id)}><FolderTree size={14} /> {item.name}<small>{item.children.length} subcarpetas</small></button>)}</div>
+        <KeyGrid keys={keys} selected={selectedKey} runtimeFeedback={runtimeFeedback} onSelect={onSelectKey} onPluginDrop={onPluginDrop} onNativeDrop={onNativeDrop} onKeyMove={onKeyMove} onAssetDrop={onAssetDrop} onFileDrop={onFileDrop} />
         {hardwareMessage && <p className="device-message ok">{hardwareMessage}</p>}
         <div className="device-footer"><span><FolderTree size={15} /> {folder ? `Carpeta ${folder.name}` : "Nivel raíz"}</span><span>{visibleFolders.length} carpetas visibles</span><span>12 teclas configurables</span></div>
       </section>
@@ -443,9 +561,10 @@ function DisplayPadPanel({
   );
 }
 
-function IntegrationPanel({ state, onRefresh }: { state: BootstrapState; onRefresh: () => void }) {
+function IntegrationPanel({ state, selectedKey, onRefresh, onAssign }: { state: BootstrapState; selectedKey: number; onRefresh: () => void; onAssign: (key: number, value: NativeActionDrop) => void }) {
   const [url, setUrl] = useState("ws://127.0.0.1:4455");
   const [password, setPassword] = useState("");
+  const [sceneName, setSceneName] = useState("");
   const [result, setResult] = useState("");
   const [testing, setTesting] = useState(false);
 
@@ -456,6 +575,15 @@ function IntegrationPanel({ state, onRefresh }: { state: BootstrapState; onRefre
     catch (error) { setResult(error instanceof Error ? error.message : String(error)); }
     finally { setTesting(false); setPassword(""); }
   };
+  const obsActions: Array<{ value: string; name: string; settings?: Record<string, unknown> }> = [
+    { value: "scene", name: "Cambiar escena", settings: { sceneName } },
+    { value: "recordStart", name: "Iniciar grabación" },
+    { value: "recordStop", name: "Detener grabación" },
+    { value: "recordPause", name: "Pausar grabación" },
+    { value: "recordResume", name: "Reanudar grabación" },
+    { value: "streamStart", name: "Iniciar streaming" },
+    { value: "streamStop", name: "Detener streaming" },
+  ];
 
   return (
     <div className="section-stack">
@@ -469,6 +597,10 @@ function IntegrationPanel({ state, onRefresh }: { state: BootstrapState; onRefre
               <span className={`mini-state ${integration.status}`}>{integration.status}</span>
             </article>
           ))}
+          <section className="glass-card obs-action-library"><span className="eyebrow">ACCIONES OBS</span><h2>Arrastra hacia una tecla</h2><label>Escena para «Cambiar escena»<input value={sceneName} onChange={(event) => setSceneName(event.target.value)} placeholder="Nombre exacto en OBS" /></label>{obsActions.map((action) => {
+            const payload: NativeActionDrop = { kind: "obs", value: action.value, name: action.name, settings: action.settings };
+            return <div className="native-action-row" draggable key={action.value} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(NEXORA_NATIVE_ACTION_MIME, JSON.stringify(payload)); }}><strong>{action.name}</strong><button type="button" className="secondary-button" onClick={() => onAssign(selectedKey, payload)}>Tecla {selectedKey + 1}</button><button type="button" className="secondary-button" disabled={state.integrations[0]?.status !== "connected" || (action.value === "scene" && !sceneName.trim())} onClick={() => { void executeObsAction(action.value, action.settings).then(setResult).catch((error) => setResult(error instanceof Error ? error.message : String(error))); }}><Play size={14} /> Probar</button></div>;
+          })}</section>
         </div>
         <div className="obs-config glass-card">
           <span className="eyebrow">OBS WEBSOCKET 5.X</span><h2>Probar conexión</h2>
@@ -621,36 +753,116 @@ function App() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pluginNotice, setPluginNotice] = useState("");
+  const [runtimeFeedback, setRuntimeFeedback] = useState<Record<number, RuntimeKeyFeedback>>({});
+  const stateRef = useRef<BootstrapState | null>(null);
+  const dirtyProfiles = useRef(new Map<string, Profile>());
+  const saveTimer = useRef<number | null>(null);
 
   const refresh = async () => setState(await getBootstrapState());
   useEffect(() => { void refresh(); }, []);
+  useEffect(() => { stateRef.current = state; }, [state]);
   useEffect(() => window.nexoraDesktop?.onEvent((value) => {
     if (!value || typeof value !== "object" || !("type" in value) || value.type !== "plugin-feedback") return;
-    const feedback = value as { event?: string; keyIndex?: number; payload?: { title?: string } };
+    const feedback = value as { event?: string; keyIndex?: number; payload?: { title?: string; image?: string; state?: number } };
+    if (Number.isInteger(feedback.keyIndex) && feedback.keyIndex !== undefined) {
+      setRuntimeFeedback((current) => ({
+        ...current,
+        [feedback.keyIndex as number]: {
+          ...current[feedback.keyIndex as number],
+          ...(feedback.event === "setTitle" ? { title: feedback.payload?.title || "" } : {}),
+          ...(feedback.event === "setImage" ? { image: feedback.payload?.image || "" } : {}),
+          ...(feedback.event === "setState" ? { state: feedback.payload?.state } : {}),
+          disconnected: false,
+        },
+      }));
+    }
     const label = feedback.event === "setTitle" && feedback.payload?.title ? `Título: ${feedback.payload.title.replaceAll("\n", " · ")}` : feedback.event || "actualización";
     setPluginNotice(`Plugin · tecla ${(feedback.keyIndex ?? 0) + 1} · ${label}`);
     window.setTimeout(() => setPluginNotice(""), 3500);
   }), []);
 
+  const flushProfileSaves = useCallback(async () => {
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    const pendingProfiles = [...dirtyProfiles.current.values()];
+    dirtyProfiles.current.clear();
+    if (!pendingProfiles.length) return;
+    setSaving(true);
+    try {
+      for (const profile of pendingProfiles) {
+        const saved = await saveProfile(profile);
+        setState((current) => current ? {
+          ...current,
+          profiles: current.profiles.map((item) => item.id === saved.id && item.updatedAt === profile.updatedAt ? saved : item),
+        } : current);
+      }
+    } catch (error) {
+      pendingProfiles.forEach((profile) => dirtyProfiles.current.set(profile.id, profile));
+      setPluginNotice(`No se pudo guardar: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
+  const scheduleProfileSave = useCallback((profile: Profile) => {
+    dirtyProfiles.current.set(profile.id, structuredClone(profile));
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => { void flushProfileSaves(); }, 350);
+  }, [flushProfileSaves]);
+
+  useEffect(() => () => {
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    if (dirtyProfiles.current.size) void flushProfileSaves();
+  }, [flushProfileSaves]);
+
   const activeProfile = useMemo(() => state?.profiles.find((profile) => profile.id === state.activeProfileId) ?? state?.profiles[0], [state]);
   const selectedFolder = useMemo(() => activeProfile ? findFolder(activeProfile.folders, selectedFolderId) : undefined, [activeProfile, selectedFolderId]);
   const selectedConfig = (selectedFolder?.keys ?? activeProfile?.keys)?.[selectedKey];
 
+  const commitProfile = useCallback((profile: Profile, changedKeys: KeyConfig[] = []) => {
+    setState((current) => current ? { ...current, profiles: current.profiles.map((item) => item.id === profile.id ? profile : item) } : current);
+    scheduleProfileSave(profile);
+    if (stateRef.current?.device.mode === "hardware") {
+      changedKeys.forEach((key) => { void applyHardwareKey(key).catch((error) => setPluginNotice(`USB: ${error instanceof Error ? error.message : String(error)}`)); });
+    }
+  }, [scheduleProfileSave]);
+
+  useEffect(() => window.nexoraDesktop?.onEvent((value) => {
+    if (!value || typeof value !== "object" || !("type" in value)) return;
+    if (value.type === "plugin-runtime-status") {
+      const status = value as { connected?: boolean; pluginId?: string };
+      if (!status.connected) setRuntimeFeedback((current) => Object.fromEntries(Object.entries(current).map(([key, feedback]) => [key, { ...feedback, disconnected: true }])));
+      setPluginNotice(`Plugin ${status.pluginId || ""} · ${status.connected ? "runtime conectado" : "runtime desconectado"}.`);
+      return;
+    }
+    if (value.type !== "plugin-settings") return;
+    const change = value as { contextId?: string; settings?: Record<string, unknown> };
+    if (!change.contextId || !change.settings) return;
+    const snapshot = stateRef.current;
+    const profile = snapshot?.profiles.find((item) => item.id === snapshot.activeProfileId);
+    if (!profile) return;
+    const updated = updatePluginSettings(profile, change.contextId, change.settings);
+    if (!updated) return;
+    const changedKeys = keysForPage(updated, selectedFolderId).filter((key) => key.actions.some((action) => action.contextId === change.contextId));
+    commitProfile(updated, changedKeys);
+    setPluginNotice("Property Inspector · configuración actualizada y guardada.");
+  }), [commitProfile, selectedFolderId]);
+
   const updateKey = (key: KeyConfig) => {
-    if (!state || !activeProfile) return;
-    const updatedProfile = selectedFolderId
-      ? { ...activeProfile, folders: updateFolderTree(activeProfile.folders, selectedFolderId, (folder) => ({ ...folder, keys: folder.keys.map((item) => item.index === key.index ? key : item) })), updatedAt: new Date().toISOString() }
-      : { ...activeProfile, keys: activeProfile.keys.map((item) => item.index === key.index ? key : item), updatedAt: new Date().toISOString() };
-    setState({ ...state, profiles: state.profiles.map((profile) => profile.id === activeProfile.id ? updatedProfile : profile) });
+    if (!activeProfile) return;
+    commitProfile(updateProfileKey(activeProfile, selectedFolderId, key), [key]);
   };
 
   const persistProfile = async () => {
     if (!activeProfile) return;
-    setSaving(true);
-    const saved = await saveProfile(activeProfile);
-    setState((current) => current ? { ...current, profiles: current.profiles.map((profile) => profile.id === saved.id ? saved : profile) } : current);
-    setSaving(false);
+    dirtyProfiles.current.set(activeProfile.id, structuredClone(activeProfile));
+    await flushProfileSaves();
   };
+
+  useEffect(() => {
+    if (!activeProfile || state?.device.mode !== "hardware") return;
+    void applyHardwarePage(keysForPage(activeProfile, selectedFolderId)).catch((error) => setPluginNotice(`Sincronización pendiente: ${error instanceof Error ? error.message : String(error)}`));
+  }, [activeProfile?.id, selectedFolderId, state?.device.mode, state?.device.connected]);
 
   const selectProfile = async (profile: Profile) => {
     await setActiveProfile(profile.id);
@@ -691,7 +903,10 @@ function App() {
   };
 
   const importAssets = async (files: FileList) => {
-    const imported = await Promise.all(Array.from(files).map((file) => importVisualAsset(file)));
+    const candidates = Array.from(files);
+    const invalid = candidates.find((file) => !isSupportedVisualFile(file));
+    if (invalid) throw new Error(`“${invalid.name}” no es PNG, JPG, WEBP o GIF válido de hasta 12 MB.`);
+    const imported = await Promise.all(candidates.map((file) => importVisualAsset(file)));
     setState((current) => current ? {
       ...current,
       assets: [...current.assets, ...imported.filter((item) => !current.assets.some((existing) => existing.id === item.id))],
@@ -718,6 +933,39 @@ function App() {
     setEditorOpen(true);
   };
 
+  const assignAssetToKey = (keyIndex: number, assetId: string, importedAsset?: VisualAsset) => {
+    if (!activeProfile || !state) return;
+    const asset = importedAsset ?? state.assets.find((item) => item.id === assetId);
+    const key = keysForPage(activeProfile, selectedFolderId)[keyIndex];
+    if (!asset || !key) return;
+    const configured = { ...key, iconPath: asset.id, animated: asset.animated };
+    commitProfile(updateProfileKey(activeProfile, selectedFolderId, configured), [configured]);
+    setSelectedKey(keyIndex);
+  };
+
+  const importFilesToKey = async (keyIndex: number, files: FileList) => {
+    try {
+      const imported = await importAssets(files);
+      if (imported[0]) assignAssetToKey(keyIndex, imported[0].id, imported[0]);
+      setPluginNotice(`${imported.length} recurso(s) importado(s); tecla ${keyIndex + 1} actualizada.`);
+    } catch (error) {
+      setPluginNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const moveKey = (source: number, target: number, copy: boolean) => {
+    if (!activeProfile || source === target) return;
+    try {
+      const updated = moveProfileKey(activeProfile, selectedFolderId, source, target, copy);
+      const page = keysForPage(updated, selectedFolderId);
+      commitProfile(updated, copy ? [page[target]] : [page[source], page[target]]);
+      setSelectedKey(target);
+      setPluginNotice(copy ? `Tecla ${source + 1} copiada a ${target + 1}.` : `Teclas ${source + 1} y ${target + 1} intercambiadas.`);
+    } catch (error) {
+      setPluginNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const assignPluginAction = async (keyIndex: number, value: PluginDrop) => {
     if (!state || !activeProfile) return;
     const plugin = state.plugins.find((item) => item.id === value.pluginId);
@@ -732,12 +980,60 @@ function App() {
       text: action.name.slice(0, 6).toUpperCase(),
       actions: [{ kind: "plugin", pluginId: plugin.id, actionId: action.id, contextId: crypto.randomUUID(), settings: value.settings }],
     };
-    const updatedProfile = selectedFolderId
-      ? { ...activeProfile, folders: updateFolderTree(activeProfile.folders, selectedFolderId, (folder) => ({ ...folder, keys: folder.keys.map((key) => key.index === keyIndex ? configured : key) })) }
-      : { ...activeProfile, keys: activeProfile.keys.map((key) => key.index === keyIndex ? configured : key) };
-    const saved = await saveProfile({ ...updatedProfile, updatedAt: new Date().toISOString() });
-    setState((current) => current ? { ...current, profiles: current.profiles.map((profile) => profile.id === saved.id ? saved : profile) } : current);
+    commitProfile(updateProfileKey(activeProfile, selectedFolderId, configured), [configured]);
     setSelectedKey(keyIndex);
+  };
+
+  const assignNativeAction = (keyIndex: number, value: NativeActionDrop) => {
+    if (!activeProfile) return;
+    const key = keysForPage(activeProfile, selectedFolderId)[keyIndex];
+    if (!key) return;
+    const configured: KeyConfig = {
+      ...key,
+      name: value.name.slice(0, 60),
+      text: value.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 6).toUpperCase(),
+      actions: [{ kind: value.kind, value: value.value, settings: value.settings || {} }],
+    };
+    commitProfile(updateProfileKey(activeProfile, selectedFolderId, configured), [configured]);
+    setSelectedKey(keyIndex);
+    setPluginNotice(`“${value.name}” asignada a la tecla ${keyIndex + 1}.`);
+  };
+
+  const openPropertyInspector = async (plugin: InstalledPlugin, action: PluginActionDefinition, keyIndex: number, settings: Record<string, unknown>) => {
+    if (!activeProfile) return;
+    const key = keysForPage(activeProfile, selectedFolderId)[keyIndex];
+    if (!key) throw new Error("Tecla fuera de rango.");
+    const assigned = key.actions[0];
+    const contextId = assigned?.kind === "plugin" && assigned.pluginId === plugin.id && assigned.actionId === action.id
+      ? assigned.contextId || crypto.randomUUID()
+      : crypto.randomUUID();
+    const configured: KeyConfig = {
+      ...key,
+      name: action.name.slice(0, 60),
+      text: action.name.slice(0, 6).toUpperCase(),
+      actions: [{ kind: "plugin", pluginId: plugin.id, actionId: action.id, contextId, settings }],
+    };
+    commitProfile(updateProfileKey(activeProfile, selectedFolderId, configured), [configured]);
+    setSelectedKey(keyIndex);
+    await openPluginPropertyInspector(plugin.id, action.id, settings, contextId, keyIndex);
+  };
+
+  const moveFolderNode = (sourceId: string, targetParentId: string | null) => {
+    if (!activeProfile) return;
+    try {
+      commitProfile(moveFolder(activeProfile, sourceId, targetParentId));
+      setPluginNotice(targetParentId ? "Carpeta movida a la nueva ubicación." : "Carpeta movida a la raíz.");
+    } catch (error) {
+      setPluginNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const reorderProfileCards = (sourceId: string, targetId: string) => {
+    if (!state) return;
+    const profiles = reorderProfiles(state.profiles, sourceId, targetId);
+    if (profiles === state.profiles) return;
+    setState({ ...state, profiles });
+    void setProfileOrder(profiles.map((profile) => profile.id)).catch((error) => setPluginNotice(`No se pudo guardar el orden: ${error instanceof Error ? error.message : String(error)}`));
   };
 
   const createFolder = async () => {
@@ -748,8 +1044,7 @@ function App() {
     const updatedProfile = selectedFolderId
       ? { ...activeProfile, folders: updateFolderTree(activeProfile.folders, selectedFolderId, (parent) => ({ ...parent, children: [...parent.children, folder] })) }
       : { ...activeProfile, folders: [...activeProfile.folders, folder] };
-    const saved = await saveProfile({ ...updatedProfile, updatedAt: new Date().toISOString() });
-    setState({ ...state, profiles: state.profiles.map((profile) => profile.id === saved.id ? saved : profile) });
+    commitProfile({ ...updatedProfile, updatedAt: new Date().toISOString() });
     setSelectedFolderId(folder.id);
     setSelectedKey(0);
   };
@@ -757,8 +1052,7 @@ function App() {
   const deleteSelectedFolder = async () => {
     if (!state || !activeProfile || !selectedFolderId || !selectedFolder) return;
     if (!window.confirm(`¿Eliminar la carpeta “${selectedFolder.name}” y todas sus subcarpetas? El perfil anterior quedará en backups.`)) return;
-    const saved = await saveProfile({ ...activeProfile, folders: removeFolderFromTree(activeProfile.folders, selectedFolderId), updatedAt: new Date().toISOString() });
-    setState({ ...state, profiles: state.profiles.map((profile) => profile.id === saved.id ? saved : profile) });
+    commitProfile({ ...activeProfile, folders: removeFolderFromTree(activeProfile.folders, selectedFolderId), updatedAt: new Date().toISOString() });
     setSelectedFolderId(null);
     setSelectedKey(0);
   };
@@ -766,18 +1060,18 @@ function App() {
   if (splash) return <Splash onDone={() => setSplash(false)} />;
   if (!state || !activeProfile) return <div className="app-loading"><LoaderCircle className="spin" /> Cargando NEXORA…</div>;
 
-  const mainContent = section === "integrations" ? <IntegrationPanel state={state} onRefresh={refresh} /> : section === "library" ? (
+  const mainContent = section === "integrations" ? <IntegrationPanel state={state} selectedKey={selectedKey} onRefresh={refresh} onAssign={assignNativeAction} /> : section === "library" ? (
     <LibraryPanel assets={state.assets} onImport={importAssets} onAssign={assignAssetToSelectedKey} />
   ) : section === "initial" ? (
     <InitialScreenPanel assets={state.assets} settings={state.visualSettings} hardwareReady={state.device.mode === "hardware" && state.device.connected} onSave={saveInitialScreen} onApply={applyInitialScreen} />
   ) : section === "plugins" ? (
-    <PluginsPanel plugins={state.plugins} catalog={state.pluginCatalog} keys={selectedFolder?.keys ?? activeProfile.keys} selectedKey={selectedKey} onRefresh={refresh} onAssign={assignPluginAction} />
+    <PluginsPanel plugins={state.plugins} catalog={state.pluginCatalog} keys={selectedFolder?.keys ?? activeProfile.keys} selectedKey={selectedKey} onRefresh={refresh} onAssign={assignPluginAction} onOpenInspector={openPropertyInspector} />
   ) : section === "displaypad" ? (
-    <DisplayPadPanel profile={activeProfile} selectedFolderId={selectedFolderId} selectedKey={selectedKey} hardwareReady={state.device.mode === "hardware" && state.device.connected} onApplyPage={applyPageToHardware} onPluginDrop={(key, value) => { void assignPluginAction(key, value); }} onNavigate={(folderId) => { setSelectedFolderId(folderId); setSelectedKey(0); }} onSelectKey={(index) => { setSelectedKey(index); setEditorOpen(true); }} onCreateFolder={() => void createFolder()} onDeleteFolder={() => void deleteSelectedFolder()} />
+    <DisplayPadPanel profile={activeProfile} selectedFolderId={selectedFolderId} selectedKey={selectedKey} runtimeFeedback={runtimeFeedback} hardwareReady={state.device.mode === "hardware" && state.device.connected} onApplyPage={applyPageToHardware} onPluginDrop={(key, value) => { void assignPluginAction(key, value); }} onNativeDrop={assignNativeAction} onKeyMove={moveKey} onAssetDrop={assignAssetToKey} onFileDrop={(key, files) => { void importFilesToKey(key, files); }} onFolderMove={moveFolderNode} onNavigate={(folderId) => { setSelectedFolderId(folderId); setSelectedKey(0); setRuntimeFeedback({}); }} onSelectKey={(index) => { setSelectedKey(index); setEditorOpen(true); }} onCreateFolder={() => void createFolder()} onDeleteFolder={() => void deleteSelectedFolder()} />
   ) : section === "macros" ? (
     <MacrosPanel macros={state.macros} onChange={(macros) => setState((current) => current ? { ...current, macros } : current)} />
   ) : section === "profiles" ? (
-    <div className="section-stack"><div className="section-title"><span><em>02</em> Perfiles</span><h1>Contextos que se adaptan</h1><p>Crea perfiles independientes y activa automatización por aplicación cuando la necesites.</p></div><div className="profile-actions"><button type="button" className="secondary-button" onClick={() => void duplicateActiveProfile()}><Copy size={16} /> Duplicar activo</button><button type="button" className="danger-button" disabled={state.profiles.length <= 1} onClick={() => void deleteActiveProfile()}><Trash2 size={16} /> Eliminar activo</button></div><div className="profile-grid">{state.profiles.map((profile) => <button type="button" key={profile.id} className={`profile-card ${profile.id === activeProfile.id ? "active" : ""}`} onClick={() => void selectProfile(profile)}><Layers3 /><div><h3>{profile.name}</h3><p>{profile.description}</p><small>{profile.keys.length} teclas · {profile.automaticApp || "Manual"}</small></div><ChevronRight /></button>)}<button type="button" className="profile-card new" onClick={() => void addProfile()}><Sparkles /><div><h3>Nuevo perfil</h3><p>Parte de una configuración limpia y segura.</p></div></button></div></div>
+    <div className="section-stack"><div className="section-title"><span><em>02</em> Perfiles</span><h1>Contextos que se adaptan</h1><p>Crea perfiles independientes y arrástralos para cambiar su orden.</p></div><div className="profile-actions"><button type="button" className="secondary-button" onClick={() => void duplicateActiveProfile()}><Copy size={16} /> Duplicar activo</button><button type="button" className="danger-button" disabled={state.profiles.length <= 1} onClick={() => void deleteActiveProfile()}><Trash2 size={16} /> Eliminar activo</button></div><div className="profile-grid">{state.profiles.map((profile) => <button type="button" draggable key={profile.id} className={`profile-card ${profile.id === activeProfile.id ? "active" : ""}`} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData(NEXORA_PROFILE_MIME, profile.id); }} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_PROFILE_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); const source = event.dataTransfer.getData(NEXORA_PROFILE_MIME); if (source) reorderProfileCards(source, profile.id); }} onClick={() => void selectProfile(profile)}><Layers3 /><div><h3>{profile.name}</h3><p>{profile.description}</p><small>{profile.keys.length} teclas · {profile.automaticApp || "Manual"}</small></div><ChevronRight /></button>)}<button type="button" className="profile-card new" onClick={() => void addProfile()}><Sparkles /><div><h3>Nuevo perfil</h3><p>Parte de una configuración limpia y segura.</p></div></button></div></div>
   ) : section === "settings" ? (
     <DeviceSettingsPanel state={state} onModeChange={changeMode} onRedetect={redetectDevice} />
   ) : (
@@ -788,7 +1082,7 @@ function App() {
       </section>
       <section className="device-panel glass-card">
         <div className="panel-heading"><div><span className="eyebrow">MOUNTAIN DISPLAYPAD</span><h2>{activeProfile.name}</h2></div><button type="button" className="secondary-button" onClick={() => setSection("displaypad")}><WandSparkles size={16} /> Personalizar</button></div>
-        <KeyGrid keys={activeProfile.keys} selected={selectedKey} onSelect={(index) => { setSelectedFolderId(null); setSelectedKey(index); setEditorOpen(true); }} />
+        <KeyGrid keys={activeProfile.keys} selected={selectedKey} runtimeFeedback={runtimeFeedback} onSelect={(index) => { setSelectedFolderId(null); setSelectedKey(index); setEditorOpen(true); }} onPluginDrop={(key, value) => { void assignPluginAction(key, value); }} onNativeDrop={assignNativeAction} onKeyMove={moveKey} onAssetDrop={assignAssetToKey} onFileDrop={(key, files) => { void importFilesToKey(key, files); }} />
         <div className="device-footer"><span><Cpu size={15} /> {state.device.name}</span><span><Activity size={15} /> {state.device.mode === "hardware" ? "HID" : "Motor simulado"}</span><span>Perfil actualizado {new Date(activeProfile.updatedAt).toLocaleDateString("es-ES")}</span></div>
       </section>
       <section className="metric-card"><MonitorUp /><div><span>Perfil activo</span><strong>{activeProfile.name}</strong></div><ChevronRight /></section>

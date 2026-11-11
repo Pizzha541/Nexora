@@ -27,6 +27,7 @@ export type ActionKind =
   | "profile"
   | "folder"
   | "macro"
+  | "obs"
   | "plugin";
 
 export type KeyAction = {
@@ -45,6 +46,7 @@ export type PluginActionDefinition = {
   description: string;
   icon?: string;
   configurable: boolean;
+  propertyInspectorPath?: string;
 };
 
 export type PluginEcosystem = "streamdeck" | "macrodeck" | "nexora";

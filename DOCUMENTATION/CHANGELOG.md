@@ -1,5 +1,14 @@
 # Changelog
 
+## Motor en tiempo real y Drag & Drop
+
+- Estado central con persistencia automática debounced y escritura atómica.
+- Cola USB serial, agrupación por tecla, página deseada y resincronización tras reconectar.
+- Drag & Drop real de acciones, recursos internos, archivos de Windows, teclas, carpetas y perfiles.
+- Actualización visual en vivo para `setTitle`, `setImage` y `setState`.
+- Primer host de Property Inspector Stream Deck con settings por contexto.
+- Ocho pruebas automatizadas y validación de archivos externos.
+
 ## 0.1.0-alpha - 2026-11-08
 
 - Estructura Tauri 2 + React + TypeScript.

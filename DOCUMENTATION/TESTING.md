@@ -2,6 +2,14 @@
 
 ## Automatizadas
 
+`npm test -- --run` valida actualmente creación de perfiles, mutación inmutable, intercambio y copia de teclas, contextos independientes de plugin, formatos visuales seguros, movimiento de carpetas sin ciclos y reordenación de perfiles.
+
+`npm run build` ejecuta TypeScript y la compilación Vite. Los archivos Electron se verifican además con `node --check`.
+
+Las pruebas de estado y USB que no usan un dispositivo físico son simuladas. No deben interpretarse como una validación física del DisplayPad.
+
+## Automatizadas
+
 - Rust: creación/recuperación de almacenamiento, dimensiones de protocolo, validación de perfiles y algoritmo de autenticación OBS.
 - Frontend: se añadirán tests de editor, navegación y estados antes del primer beta.
 - Frontend actual: 2 tests unitarios aprobados; build Vite de producción aprobado.

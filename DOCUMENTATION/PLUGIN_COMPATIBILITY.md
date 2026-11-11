@@ -24,8 +24,13 @@ El runtime experimental de NEXORA admite actualmente plugins JavaScript no cifra
 - Recepción de `setTitle`, `setImage`, `setState`, `showOk`, `showAlert`, `openUrl` y `logMessage`.
 - Puente de `setTitle` y `setImage` hacia la tecla física correspondiente, con archivos de caché limitados y validación de imágenes `data:`.
 - Configuración individual en JSON y contexto estable por botón.
+- Host experimental de Property Inspector en una ventana Chromium aislada.
+- Registro `registerPropertyInspector`, `getSettings`, `setSettings`, settings globales y mensajería `sendToPlugin`/`sendToPropertyInspector`.
+- Persistencia en tiempo real de los settings recibidos, asociada al `contextId` de cada tecla.
 
-No se declara compatibilidad con plugins nativos, DRM/cifrados, encoders, perfiles, Property Inspector completo ni todas las llamadas del SDK. Un plugin que dependa de esas superficies se marca como solo manifiesto o puede fallar con un error explícito.
+No se declara compatibilidad completa con Property Inspector: el host cubre el contrato WebSocket esencial y componentes HTML locales, pero todavía debe probarse con una matriz mayor de plugins reales. Tampoco se declara compatibilidad con plugins nativos, DRM/cifrados, encoders, perfiles ni todas las llamadas del SDK. Un plugin que dependa de esas superficies se marca como solo manifiesto o puede fallar con un error explícito.
+
+El Property Inspector se abre con `sandbox: true`, sin Node.js ni preload. Las navegaciones HTTP externas se redirigen al navegador del sistema. Instalar, autorizar, abrir el inspector y ejecutar una acción siguen siendo operaciones separadas.
 
 Fuentes oficiales:
 
