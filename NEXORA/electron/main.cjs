@@ -1,14 +1,12 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, net, shell, utilityProcess } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, net, shell, utilityProcess } = require('electron');
+const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createPluginService } = require('./plugin-service.cjs');
 const { ObsService } = require('./obs-service.cjs');
-
-const instanceLock = app.requestSingleInstanceLock();
-if (!instanceLock) app.quit();
 
 let window = null;
 let worker = null;
@@ -32,6 +30,8 @@ const windowsLocalData = process.platform === 'win32'
   : app.getPath('appData');
 const dataRoot = path.join(windowsLocalData, 'Nexora', 'NEXORA', 'data');
 app.setPath('userData', dataRoot);
+const instanceLock = app.requestSingleInstanceLock();
+if (!instanceLock) app.quit();
 const smokeTest = process.argv.includes('--smoke-test');
 const rendererSmokeTest = process.argv.includes('--renderer-smoke-test');
 
@@ -347,24 +347,68 @@ function mapHardwareKeys(keys, repository = loadRepository()) {
   });
 }
 
-async function runKeyAction(keyNumber) {
-  const key = activeKeys?.[keyNumber - 1];
+function findFolderById(folders, id) {
+  for (const folder of folders || []) {
+    if (folder.id === id) return folder;
+    const nested = findFolderById(folder.children, id);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function sendMediaKey(value) {
+  const codes = { playPause: 0xB3, next: 0xB0, previous: 0xB1, volumeUp: 0xAF, volumeDown: 0xAE, mute: 0xAD };
+  const code = codes[value];
+  if (!code || process.platform !== 'win32') throw new Error('Control multimedia no compatible en este sistema.');
+  const script = `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class NXMedia { [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra); }'; [NXMedia]::keybd_event(${code},0,0,[UIntPtr]::Zero); [NXMedia]::keybd_event(${code},0,2,[UIntPtr]::Zero)`;
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true, stdio: 'ignore' });
+  child.unref();
+}
+
+async function executeKeyAction(key, keyIndex) {
   const action = key?.actions?.[0];
   if (!action || action.kind === 'none') return;
+  if (action.kind === 'openUrl') {
+    const rawUrl = String(action.value || '').trim();
+    if (!rawUrl) throw new Error('La dirección web es obligatoria.');
+    const target = new URL(/^[a-z][a-z\d+.-]*:/i.test(rawUrl) ? rawUrl : `https://${rawUrl}`);
+    if (!['http:', 'https:'].includes(target.protocol)) throw new Error('URL no permitida.');
+    await shell.openExternal(target.href);
+  } else if (action.kind === 'launchPath') {
+    if (!path.isAbsolute(action.value || '')) throw new Error('La ruta debe ser absoluta.');
+    const error = await shell.openPath(action.value);
+    if (error) throw new Error(error);
+  } else if (action.kind === 'media') {
+    sendMediaKey(action.value);
+  } else if (action.kind === 'plugin') {
+    await pluginService.execute(action.pluginId, action.actionId, action.settings || {}, action.contextId, keyIndex);
+  } else if (action.kind === 'obs') {
+    await obsService.action(action.value, action.settings || {});
+  } else if (action.kind === 'profile') {
+    const repository = loadRepository();
+    const profile = repository.profiles.find((item) => item.id === action.value);
+    if (!profile) throw new Error('Perfil no encontrado.');
+    repository.settings.activeProfileId = profile.id;
+    saveSettings(repository.settings);
+    activeKeys = structuredClone(profile.keys);
+    await syncDesiredPage(repository);
+    sendEvent({ type: 'navigate-profile', profileId: profile.id });
+  } else if (action.kind === 'folder') {
+    const repository = loadRepository();
+    const profile = repository.profiles.find((item) => item.id === repository.settings.activeProfileId);
+    const folder = findFolderById(profile?.folders, action.value);
+    if (!folder) throw new Error('Carpeta no encontrada.');
+    activeKeys = structuredClone(folder.keys);
+    await syncDesiredPage(repository);
+    sendEvent({ type: 'navigate-folder', folderId: folder.id });
+  } else {
+    throw new Error(`La acción ${action.kind} todavía no tiene ejecutor seguro.`);
+  }
+}
+
+async function runKeyAction(keyNumber) {
   try {
-    if (action.kind === 'openUrl') {
-      const target = new URL(action.value);
-      if (!['http:', 'https:'].includes(target.protocol)) throw new Error('URL no permitida.');
-      await shell.openExternal(target.href);
-    } else if (action.kind === 'launchPath') {
-      if (!path.isAbsolute(action.value || '')) throw new Error('La ruta debe ser absoluta.');
-      const error = await shell.openPath(action.value);
-      if (error) throw new Error(error);
-    } else if (action.kind === 'plugin') {
-      await pluginService.execute(action.pluginId, action.actionId, action.settings || {}, action.contextId, keyNumber - 1);
-    } else if (action.kind === 'obs') {
-      await obsService.action(action.value, action.settings || {});
-    }
+    await executeKeyAction(activeKeys?.[keyNumber - 1], keyNumber - 1);
   } catch (error) {
     sendEvent({ type: 'log', level: 'error', message: `Tecla ${keyNumber}: ${error.message}` });
   }
@@ -449,6 +493,11 @@ async function invoke(command, args) {
     await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, Math.max(1000, Number(args.durationMs || 15_000)))));
     return buttonEvents.filter((event) => event.timestampMs >= started);
   }
+  if (command === 'pick_file') {
+    const result = await dialog.showOpenDialog(window || undefined, { properties: ['openFile'], title: 'Seleccionar aplicación o archivo' });
+    return result.canceled ? null : result.filePaths[0] || null;
+  }
+  if (command === 'execute_key_action') { await executeKeyAction(structuredClone(args.key), Number(args.keyIndex || 0)); return 'Acción ejecutada.'; }
   if (command === 'import_visual_asset') {
     const extensions = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
     const extension = extensions[args.mimeType];
@@ -561,6 +610,7 @@ async function invoke(command, args) {
   }
   if (command === 'test_obs_connection' || command === 'obs_connect') return obsService.connect(args.url, args.password || '');
   if (command === 'obs_action') { await obsService.action(args.action, args.settings || {}); return 'Acción enviada a OBS.'; }
+  if (command === 'obs_get_scenes') return obsService.getScenes();
   if (command === 'apply_key_config') return null;
   throw new Error(`Comando no implementado en Electron: ${command}`);
 }

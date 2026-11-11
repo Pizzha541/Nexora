@@ -54,6 +54,9 @@ import {
   saveVisualSettings,
   executePluginAction,
   executeObsAction,
+  executeConfiguredKey,
+  getObsScenes,
+  pickFile,
   openPluginPropertyInspector,
   installCatalogPlugin,
   installPluginPackage,
@@ -61,6 +64,7 @@ import {
   uninstallPlugin,
 } from "./lib/backend";
 import type { BootstrapState, ButtonEvent, DeviceMode, FolderNode, InstalledPlugin, KeyConfig, MacroDefinition, PluginActionDefinition, PluginCatalogEntry, Profile, VisualAsset, VisualSettings } from "./types";
+import { ActionLibrary, EditorWorkspace, KeyInspector, type NativeActionDrop, type PluginDrop } from "./components/EditorWorkspace";
 import {
   isSupportedVisualFile,
   keysForPage,
@@ -174,15 +178,15 @@ function AssetVisual({ assetId, alt = "" }: { assetId: string; alt?: string }) {
   return source ? <img className="asset-visual" src={source} alt={alt} /> : <span className="asset-loading"><LoaderCircle className="spin" size={15} /></span>;
 }
 
-type PluginDrop = { pluginId: string; actionId: string; settings: Record<string, unknown> };
-type NativeActionDrop = { kind: "obs"; value: string; name: string; settings?: Record<string, unknown> };
 type RuntimeKeyFeedback = { title?: string; image?: string; state?: number; disconnected?: boolean };
 
-function KeyGrid({ keys, selected, runtimeFeedback = {}, onSelect, onPluginDrop, onNativeDrop, onKeyMove, onAssetDrop, onFileDrop }: {
+function KeyGrid({ keys, selected, pressedKeys = new Set(), runtimeFeedback = {}, onSelect, onActivate, onPluginDrop, onNativeDrop, onKeyMove, onAssetDrop, onFileDrop }: {
   keys: KeyConfig[];
   selected: number;
+  pressedKeys?: Set<number>;
   runtimeFeedback?: Record<number, RuntimeKeyFeedback>;
   onSelect: (key: number) => void;
+  onActivate?: (key: number) => void;
   onPluginDrop?: (key: number, value: PluginDrop) => void;
   onNativeDrop?: (key: number, value: NativeActionDrop) => void;
   onKeyMove?: (source: number, target: number, copy: boolean) => void;
@@ -203,9 +207,10 @@ function KeyGrid({ keys, selected, runtimeFeedback = {}, onSelect, onPluginDrop,
           type="button"
           key={key.index}
           draggable
-          className={`device-key ${selected === key.index ? "selected" : ""} ${dropTarget === key.index ? (dropInvalid ? "drop-invalid" : "drop-valid") : ""}`}
+          className={`device-key ${selected === key.index ? "selected" : ""} ${pressedKeys.has(key.index) ? "pressed" : ""} ${dropTarget === key.index ? (dropInvalid ? "drop-invalid" : "drop-valid") : ""}`}
           style={{ "--key-color": key.color } as React.CSSProperties}
           onClick={() => onSelect(key.index)}
+          onDoubleClick={() => onActivate?.(key.index)}
           onDragStart={(event) => {
             event.dataTransfer.effectAllowed = "copyMove";
             event.dataTransfer.setData(NEXORA_KEY_MIME, JSON.stringify({ index: key.index }));
@@ -465,7 +470,7 @@ function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign
       <label className="secondary-button plugin-import"><Upload size={16} /> Importar paquete<input type="file" accept=".streamDeckPlugin,.macroDeckPlugin,.zip" onChange={(event) => { void importPackage(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
     </section>
     {message && <p className={`device-message ${/error|no |inválid|fall/i.test(message) ? "error" : "ok"}`}>{message}</p>}
-    <section className="glass-card plugin-drop-panel"><div><span className="eyebrow">ASIGNACIÓN RÁPIDA</span><h2>Arrastra una acción hacia una tecla</h2><p>La configuración JSON se guarda de forma independiente en cada botón.</p></div><div className="plugin-drop-grid">{keys.map((key) => <button type="button" key={key.index} className={selectedKey === key.index ? "selected" : ""} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_PLUGIN_ACTION_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); try { void onAssign(key.index, JSON.parse(event.dataTransfer.getData(NEXORA_PLUGIN_ACTION_MIME)) as PluginDrop).then(() => setMessage(`Acción asignada a la tecla ${key.index + 1}.`)); } catch { setMessage("La acción arrastrada no es válida."); } }}><strong>{key.index + 1}</strong><span>{key.name}</span></button>)}</div></section>
+    <section className="glass-card plugin-drop-panel"><div><span className="eyebrow">ASIGNACIÓN RÁPIDA</span><h2>Arrastra una acción hacia una tecla</h2><p>Los ajustes se guardan de forma independiente en cada botón.</p></div><div className="plugin-drop-grid">{keys.map((key) => <button type="button" key={key.index} className={selectedKey === key.index ? "selected" : ""} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_PLUGIN_ACTION_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); try { void onAssign(key.index, JSON.parse(event.dataTransfer.getData(NEXORA_PLUGIN_ACTION_MIME)) as PluginDrop).then(() => setMessage(`Acción asignada a la tecla ${key.index + 1}.`)); } catch { setMessage("La acción arrastrada no es válida."); } }}><strong>{key.index + 1}</strong><span>{key.name}</span></button>)}</div></section>
     <div className="hub-heading"><h2>Catálogo gratuito verificado</h2><span>{catalog.length} disponible</span></div>
     <div className="plugin-grid">
       {catalog.filter((item) => matches(item.name, item.ecosystem)).map((item) => {
@@ -490,8 +495,8 @@ function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign
           let dragSettings: Record<string, unknown> = {};
           try { dragSettings = parseSettings(actionKey); } catch {}
           return <div className="plugin-action-row" draggable key={action.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(NEXORA_PLUGIN_ACTION_MIME, JSON.stringify({ pluginId: plugin.id, actionId: action.id, settings: dragSettings })); }}>
-            <div><strong>{action.name}</strong><p>{action.description || action.id}</p></div>
-            <textarea aria-label={`Configuración de ${action.name}`} value={settings[actionKey] ?? "{}"} onChange={(event) => setSettings((current) => ({ ...current, [actionKey]: event.target.value }))} spellCheck={false} />
+            <div><strong>{action.name}</strong><p>{action.description || "Acción del plugin"}</p></div>
+            <details className="advanced-settings"><summary>Ajustes avanzados</summary><textarea aria-label={`Configuración avanzada de ${action.name}`} value={settings[actionKey] ?? "{}"} onChange={(event) => setSettings((current) => ({ ...current, [actionKey]: event.target.value }))} spellCheck={false} /></details>
             <button type="button" className="secondary-button" onClick={() => void assign(plugin, action)} title={`Asignar a tecla ${selectedKey + 1}`}>Tecla {selectedKey + 1}</button>
             {action.configurable && <button type="button" className="secondary-button" disabled={!plugin.executionApproved || busy === `pi:${actionKey}`} onClick={() => {
               let parsed: Record<string, unknown>;
@@ -746,7 +751,7 @@ function MacrosPanel({ macros, onChange }: { macros: MacroDefinition[]; onChange
 
 function App() {
   const [splash, setSplash] = useState(true);
-  const [section, setSection] = useState<Section>("dashboard");
+  const [section, setSection] = useState<Section>("displaypad");
   const [state, setState] = useState<BootstrapState | null>(null);
   const [selectedKey, setSelectedKey] = useState(0);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
@@ -754,11 +759,23 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [pluginNotice, setPluginNotice] = useState("");
   const [runtimeFeedback, setRuntimeFeedback] = useState<Record<number, RuntimeKeyFeedback>>({});
+  const [pressedKeys, setPressedKeys] = useState<Set<number>>(new Set());
+  const [obsScenes, setObsScenes] = useState<string[]>([]);
   const stateRef = useRef<BootstrapState | null>(null);
   const dirtyProfiles = useRef(new Map<string, Profile>());
   const saveTimer = useRef<number | null>(null);
 
   const refresh = async () => setState(await getBootstrapState());
+  const loadObsScenes = useCallback(async () => {
+    try {
+      const result = await getObsScenes();
+      setObsScenes(result.scenes);
+      return result;
+    } catch {
+      setObsScenes([]);
+      return undefined;
+    }
+  }, []);
   useEffect(() => { void refresh(); }, []);
   useEffect(() => { stateRef.current = state; }, [state]);
   useEffect(() => window.nexoraDesktop?.onEvent((value) => {
@@ -829,6 +846,43 @@ function App() {
 
   useEffect(() => window.nexoraDesktop?.onEvent((value) => {
     if (!value || typeof value !== "object" || !("type" in value)) return;
+    if (value.type === "event") {
+      const event = value as { name?: string; key?: number };
+      if ((event.name === "buttonDown" || event.name === "buttonUp") && Number.isFinite(event.key)) {
+        const index = Math.max(0, Math.min(11, Number(event.key) - 1));
+        setPressedKeys((current) => {
+          const next = new Set(current);
+          if (event.name === "buttonDown") next.add(index); else next.delete(index);
+          return next;
+        });
+        setSelectedKey(index);
+      }
+      return;
+    }
+    if (value.type === "navigate-profile") {
+      const event = value as { profileId?: string };
+      if (event.profileId) setState((current) => current ? { ...current, activeProfileId: event.profileId as string } : current);
+      setSelectedFolderId(null);
+      setSelectedKey(0);
+      return;
+    }
+    if (value.type === "navigate-folder") {
+      const event = value as { folderId?: string };
+      setSelectedFolderId(event.folderId || null);
+      setSelectedKey(0);
+      return;
+    }
+    if (value.type === "obs-status") {
+      const event = value as { connected?: boolean };
+      setState((current) => current ? { ...current, integrations: current.integrations.map((integration) => integration.id === "obs" ? { ...integration, status: event.connected ? "connected" : "disconnected" } : integration) } : current);
+      if (event.connected) void loadObsScenes(); else setObsScenes([]);
+      return;
+    }
+    if (value.type === "obs-event") {
+      const event = value as { eventType?: string };
+      if (event.eventType === "SceneListChanged" || event.eventType === "CurrentProgramSceneChanged") void loadObsScenes();
+      return;
+    }
     if (value.type === "plugin-runtime-status") {
       const status = value as { connected?: boolean; pluginId?: string };
       if (!status.connected) setRuntimeFeedback((current) => Object.fromEntries(Object.entries(current).map(([key, feedback]) => [key, { ...feedback, disconnected: true }])));
@@ -846,7 +900,7 @@ function App() {
     const changedKeys = keysForPage(updated, selectedFolderId).filter((key) => key.actions.some((action) => action.contextId === change.contextId));
     commitProfile(updated, changedKeys);
     setPluginNotice("Property Inspector · configuración actualizada y guardada.");
-  }), [commitProfile, selectedFolderId]);
+  }), [commitProfile, loadObsScenes, selectedFolderId]);
 
   const updateKey = (key: KeyConfig) => {
     if (!activeProfile) return;
@@ -1067,7 +1121,76 @@ function App() {
   ) : section === "plugins" ? (
     <PluginsPanel plugins={state.plugins} catalog={state.pluginCatalog} keys={selectedFolder?.keys ?? activeProfile.keys} selectedKey={selectedKey} onRefresh={refresh} onAssign={assignPluginAction} onOpenInspector={openPropertyInspector} />
   ) : section === "displaypad" ? (
-    <DisplayPadPanel profile={activeProfile} selectedFolderId={selectedFolderId} selectedKey={selectedKey} runtimeFeedback={runtimeFeedback} hardwareReady={state.device.mode === "hardware" && state.device.connected} onApplyPage={applyPageToHardware} onPluginDrop={(key, value) => { void assignPluginAction(key, value); }} onNativeDrop={assignNativeAction} onKeyMove={moveKey} onAssetDrop={assignAssetToKey} onFileDrop={(key, files) => { void importFilesToKey(key, files); }} onFolderMove={moveFolderNode} onNavigate={(folderId) => { setSelectedFolderId(folderId); setSelectedKey(0); setRuntimeFeedback({}); }} onSelectKey={(index) => { setSelectedKey(index); setEditorOpen(true); }} onCreateFolder={() => void createFolder()} onDeleteFolder={() => void deleteSelectedFolder()} />
+    <EditorWorkspace
+      left={<ActionLibrary
+        profiles={state.profiles}
+        folders={activeProfile.folders}
+        plugins={state.plugins}
+        obsScenes={obsScenes}
+        obsConnected={state.integrations.some((integration) => integration.id === "obs" && integration.status === "connected")}
+        onRefreshObs={() => { void loadObsScenes().then((result) => setPluginNotice(result ? `${result.scenes.length} escenas de OBS cargadas.` : "Conecta OBS desde Integraciones.")); }}
+        onAssignNative={(action) => assignNativeAction(selectedKey, action)}
+        onAssignPlugin={(action) => { void assignPluginAction(selectedKey, action); }}
+      />}
+      center={<div className="device-stage">
+        <div className="stage-toolbar">
+          <div><span className="eyebrow">EDITOR EN TIEMPO REAL</span><h1>{selectedFolder?.name ?? activeProfile.name}</h1></div>
+          <div className="stage-controls">
+            <select aria-label="Perfil activo" value={activeProfile.id} onChange={(event) => { const profile = state.profiles.find((item) => item.id === event.target.value); if (profile) void selectProfile(profile); }}>{state.profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select>
+            <StatusPill connected={state.device.connected} mode={state.device.mode} />
+          </div>
+        </div>
+        <div className="stage-folder-bar">
+          <button type="button" className={!selectedFolderId ? "active" : ""} onClick={() => { setSelectedFolderId(null); setSelectedKey(0); }}><Layers3 size={14} /> Principal</button>
+          {activeProfile.folders.map((folder) => <button type="button" className={selectedFolderId === folder.id ? "active" : ""} key={folder.id} onClick={() => { setSelectedFolderId(folder.id); setSelectedKey(0); }}><FolderTree size={14} /> {folder.name}</button>)}
+          <button type="button" className="stage-add" onClick={() => void createFolder()}><Plus size={14} /> Carpeta</button>
+          {selectedFolderId && <button type="button" className="stage-delete" onClick={() => void deleteSelectedFolder()}><Trash2 size={14} /></button>}
+        </div>
+        <div className="displaypad-frame">
+          <div className="displaypad-brand"><span>NEXORA</span><small>DISPLAYPAD 6 × 2</small></div>
+          <KeyGrid
+            keys={keysForPage(activeProfile, selectedFolderId)}
+            selected={selectedKey}
+            pressedKeys={pressedKeys}
+            runtimeFeedback={runtimeFeedback}
+            onSelect={(index) => { setSelectedKey(index); setEditorOpen(false); }}
+            onActivate={(index) => {
+              const key = keysForPage(activeProfile, selectedFolderId)[index];
+              if (!key) return;
+              void executeConfiguredKey(key).then(setPluginNotice).catch((error) => setPluginNotice(error instanceof Error ? error.message : String(error)));
+            }}
+            onPluginDrop={(key, value) => { void assignPluginAction(key, value); }}
+            onNativeDrop={assignNativeAction}
+            onKeyMove={moveKey}
+            onAssetDrop={assignAssetToKey}
+            onFileDrop={(key, files) => { void importFilesToKey(key, files); }}
+          />
+          <div className="stage-hint"><span>Doble clic para probar</span><span>Arrastra acciones, imágenes o teclas</span></div>
+        </div>
+        <div className="stage-footer">
+          <span><Cpu size={14} /> {state.device.name}</span>
+          <span><Activity size={14} /> {state.device.mode === "hardware" ? (state.device.connected ? "Hardware detectado" : "Hardware no detectado") : "Simulación"}</span>
+          <button type="button" className="secondary-button" disabled={state.device.mode !== "hardware" || !state.device.connected} onClick={() => void applyPageToHardware(keysForPage(activeProfile, selectedFolderId)).then(setPluginNotice).catch((error) => setPluginNotice(error instanceof Error ? error.message : String(error)))}><MonitorUp size={15} /> Enviar página</button>
+        </div>
+      </div>}
+      right={selectedConfig ? <KeyInspector
+        keyConfig={selectedConfig}
+        assets={state.assets}
+        profiles={state.profiles}
+        folders={activeProfile.folders}
+        plugins={state.plugins}
+        obsScenes={obsScenes}
+        obsConnected={state.integrations.some((integration) => integration.id === "obs" && integration.status === "connected")}
+        onChange={updateKey}
+        onImport={importAssets}
+        onPickFile={pickFile}
+        onOpenPluginInspector={(plugin, actionId, settings) => {
+          const action = plugin.actions.find((item) => item.id === actionId);
+          if (action) void openPropertyInspector(plugin, action, selectedKey, settings).catch((error) => setPluginNotice(error instanceof Error ? error.message : String(error)));
+        }}
+        onTest={() => void executeConfiguredKey(selectedConfig).then(setPluginNotice).catch((error) => setPluginNotice(error instanceof Error ? error.message : String(error)))}
+      /> : <div className="empty-inspector">Selecciona una tecla</div>}
+    />
   ) : section === "macros" ? (
     <MacrosPanel macros={state.macros} onChange={(macros) => setState((current) => current ? { ...current, macros } : current)} />
   ) : section === "profiles" ? (
@@ -1101,9 +1224,9 @@ function App() {
       <main className="main-area">
         <header><div><span className="breadcrumb">NEXORA / {navigation.find((item) => item.id === section)?.label}</span></div><div className="header-actions"><StatusPill connected={state.device.connected} mode={state.device.mode} /><button className="avatar">NX</button></div></header>
         {state.startupWarning && <div className="recovery-banner">{state.startupWarning}</div>}
-        <div className="content">{mainContent}</div>
+        <div className={`content ${section === "displaypad" ? "editor-content" : ""}`}>{mainContent}</div>
       </main>
-      {editorOpen && selectedConfig && <KeyEditor keyConfig={selectedConfig} assets={state.assets} hardwareReady={state.device.mode === "hardware" && state.device.connected} onImport={importAssets} onApplyHardware={applySelectedKeyToHardware} onChange={updateKey} onClose={() => setEditorOpen(false)} onSave={() => void persistProfile()} />}
+      {section !== "displaypad" && editorOpen && selectedConfig && <KeyEditor keyConfig={selectedConfig} assets={state.assets} hardwareReady={state.device.mode === "hardware" && state.device.connected} onImport={importAssets} onApplyHardware={applySelectedKeyToHardware} onChange={updateKey} onClose={() => setEditorOpen(false)} onSave={() => void persistProfile()} />}
       {saving && <div className="toast"><LoaderCircle className="spin" size={16} /> Guardando perfil…</div>}
       {pluginNotice && <div className="toast plugin-toast"><Boxes size={16} /> {pluginNotice}</div>}
     </div>

@@ -105,6 +105,16 @@ class ObsService {
     return this.request(request[0], request[1]);
   }
 
+  async getScenes() {
+    const data = await this.request('GetSceneList');
+    return {
+      current: String(data.currentProgramSceneName || ''),
+      scenes: Array.isArray(data.scenes)
+        ? data.scenes.map((scene) => String(scene.sceneName || '')).filter(Boolean)
+        : [],
+    };
+  }
+
   disconnect() {
     try { this.socket?.close(); } catch {}
     this.socket = null;
