@@ -1,6 +1,6 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { createProfile, localBootstrap } from "./defaults";
-import type { BootstrapState, ButtonEvent, DeviceMode, InstalledPlugin, KeyConfig, MacroDefinition, Profile, VisualAsset, VisualSettings } from "../types";
+import type { BootstrapState, ButtonEvent, DeviceMode, InstalledPlugin, KeyConfig, MacroDefinition, Profile, UpdateStatus, VisualAsset, VisualSettings } from "../types";
 
 const clone = <T,>(value: T): T => structuredClone(value);
 const invoke = <T,>(command: string, args?: Record<string, unknown>): Promise<T> =>
@@ -97,6 +97,18 @@ export async function pickFile(): Promise<string | undefined> {
 
 export async function executeConfiguredKey(key: KeyConfig): Promise<string> {
   return invoke<string>("execute_key_action", { key, keyIndex: key.index });
+}
+
+export async function getUpdateStatus(): Promise<UpdateStatus> {
+  return invoke("update_get_status");
+}
+
+export async function checkForAppUpdate(): Promise<UpdateStatus> {
+  return invoke("update_check");
+}
+
+export async function installAppUpdate(): Promise<UpdateStatus> {
+  return invoke("update_install");
 }
 
 export async function importVisualAsset(file: File): Promise<VisualAsset> {

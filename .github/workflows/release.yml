@@ -1,0 +1,35 @@
+name: Publicar NEXORA
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: NEXORA
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: NEXORA/package-lock.json
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Usar la versión de la etiqueta
+        shell: pwsh
+        run: npm version $env:GITHUB_REF_NAME.TrimStart('v') --no-git-tag-version
+      - name: Pruebas
+        run: npm test
+      - name: Compilar y publicar instalador
+        run: npm run desktop:dist -- --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

@@ -21,6 +21,16 @@ try {
   const names = new AdmZip(unsafeBuffer).getEntries().map((entry) => entry.entryName);
   if (names.some((name) => name.includes('..'))) assert.throws(() => service.install(unsafeBuffer, { approvedInstall: true }), /salir|insegura/);
   assert.equal(fs.existsSync(path.join(__dirname, 'escape.txt')), false);
+
+  const protectedPackage = new AdmZip();
+  protectedPackage.addFile('marketplace.sdPlugin/manifest.json', Buffer.concat([
+    Buffer.from('ELGATO', 'ascii'),
+    Buffer.alloc(64),
+  ]));
+  assert.throws(
+    () => service.install(protectedPackage.toBuffer(), { approvedInstall: true }),
+    /protegido por DRM de Elgato/,
+  );
   process.stdout.write('PLUGIN_SECURITY_OK\n');
 } finally {
   service.stopAll();

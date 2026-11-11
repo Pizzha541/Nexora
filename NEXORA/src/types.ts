@@ -153,6 +153,15 @@ export type VisualSettings = {
   screensaverIdleSeconds: number;
 };
 
+export type UpdateStatus = {
+  phase: "idle" | "checking" | "available" | "current" | "downloading" | "downloaded" | "installing" | "development" | "error";
+  currentVersion: string;
+  availableVersion?: string | null;
+  progress: number;
+  message: string;
+  configured: boolean;
+};
+
 export type BootstrapState = {
   version: string;
   activeProfileId: string;

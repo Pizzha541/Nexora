@@ -1,7 +1,7 @@
 {
   "name": "nexora",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Control profesional para Mountain DisplayPad con imágenes, GIF, perfiles e integraciones.",
   "author": "NEXORA",
   "main": "electron/main.cjs",
@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run && node tests/plugin-security.cjs",
     "test:watch": "vitest",
     "tauri": "tauri",
     "desktop": "npm run build && electron .",
@@ -21,6 +21,7 @@
     "@tauri-apps/api": "^2.9.0",
     "@tauri-apps/plugin-log": "^2.10.0",
     "adm-zip": "^0.6.1",
+    "electron-updater": "^6.8.11",
     "lucide-react": "^0.468.0",
     "mountain-displaypad": "1.1.1",
     "react": "^19.0.0",
@@ -54,6 +55,12 @@
       "electron/**/*",
       "package.json"
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "Pizzha541",
+      "repo": "Nexora",
+      "releaseType": "release"
+    },
     "asarUnpack": [
       "**/*.node",
       "node_modules/sharp/**/*",

@@ -56,6 +56,9 @@ import {
   executeObsAction,
   executeConfiguredKey,
   getObsScenes,
+  getUpdateStatus,
+  checkForAppUpdate,
+  installAppUpdate,
   pickFile,
   openPluginPropertyInspector,
   installCatalogPlugin,
@@ -63,7 +66,7 @@ import {
   setPluginExecutionApproval,
   uninstallPlugin,
 } from "./lib/backend";
-import type { BootstrapState, ButtonEvent, DeviceMode, FolderNode, InstalledPlugin, KeyConfig, MacroDefinition, PluginActionDefinition, PluginCatalogEntry, Profile, VisualAsset, VisualSettings } from "./types";
+import type { BootstrapState, ButtonEvent, DeviceMode, FolderNode, InstalledPlugin, KeyConfig, MacroDefinition, PluginActionDefinition, PluginCatalogEntry, Profile, UpdateStatus, VisualAsset, VisualSettings } from "./types";
 import { ActionLibrary, EditorWorkspace, KeyInspector, type NativeActionDrop, type PluginDrop } from "./components/EditorWorkspace";
 import {
   isSupportedVisualFile,
@@ -631,6 +634,16 @@ function DeviceSettingsPanel({
   const [listening, setListening] = useState(false);
   const [events, setEvents] = useState<ButtonEvent[]>([]);
   const [listenMessage, setListenMessage] = useState("");
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: "idle", currentVersion: state.version, progress: 0, message: "Listo para buscar actualizaciones.", configured: state.updaterConfigured });
+  const [updateBusy, setUpdateBusy] = useState(false);
+
+  useEffect(() => {
+    void getUpdateStatus().then(setUpdateStatus).catch((error) => setUpdateStatus((current) => ({ ...current, phase: "error", message: error instanceof Error ? error.message : String(error) })));
+    return window.nexoraDesktop?.onEvent((value) => {
+      if (!value || typeof value !== "object" || !("type" in value) || value.type !== "update-status" || !("status" in value)) return;
+      setUpdateStatus(value.status as UpdateStatus);
+    });
+  }, []);
 
   const listen = async () => {
     setListening(true);
@@ -671,7 +684,20 @@ function DeviceSettingsPanel({
         {listenMessage && <div className="listener-result"><strong>{listenMessage}</strong>{events.length > 0 && <div className="event-chips">{events.map((event, index) => <span key={`${event.timestampMs}-${event.key}-${index}`} className={event.pressed ? "pressed" : "released"}>T{event.key} {event.pressed ? "↓" : "↑"} · {event.timestampMs} ms <small>{event.rawOffset42.toString(16).padStart(2, "0")}/{event.rawOffset47.toString(16).padStart(2, "0")}</small></span>)}</div>}</div>}
         <hr />
         <h2>Actualizaciones</h2>
-        <p>{state.updaterConfigured ? "Canal firmado configurado." : "Pendiente de repositorio y clave pública. Nunca se incluirá la clave privada."}</p>
+        <div className={`update-status ${updateStatus.phase}`}>
+          <div><strong>NEXORA {updateStatus.currentVersion}</strong>{updateStatus.availableVersion && <span>Nueva: {updateStatus.availableVersion}</span>}</div>
+          <p>{updateStatus.message}</p>
+          {updateStatus.phase === "downloading" && <div className="update-progress"><span style={{ width: `${updateStatus.progress}%` }} /></div>}
+        </div>
+        <div className="hardware-actions">
+          <button type="button" className="secondary-button" disabled={updateBusy || updateStatus.phase === "checking" || updateStatus.phase === "downloading"} onClick={() => { setUpdateBusy(true); void checkForAppUpdate().then(setUpdateStatus).catch((error) => setUpdateStatus((current) => ({ ...current, phase: "error", message: error instanceof Error ? error.message : String(error) }))).finally(() => setUpdateBusy(false)); }}>{updateStatus.phase === "checking" ? <LoaderCircle className="spin" size={16} /> : <Activity size={16} />} Buscar actualizaciones</button>
+          <button type="button" className="primary-button" disabled={updateBusy || !["available", "downloaded"].includes(updateStatus.phase)} onClick={() => {
+            if (!window.confirm(`¿Descargar NEXORA ${updateStatus.availableVersion || "nueva"}, cerrar la aplicación e instalarla automáticamente?`)) return;
+            setUpdateBusy(true);
+            void installAppUpdate().then(setUpdateStatus).catch((error) => setUpdateStatus((current) => ({ ...current, phase: "error", message: error instanceof Error ? error.message : String(error) }))).finally(() => setUpdateBusy(false));
+          }}><Download size={16} /> {updateStatus.phase === "downloaded" ? "Instalar y reiniciar" : "Descargar e instalar"}</button>
+        </div>
+        <p>El canal usa GitHub Releases y verifica el SHA-512 publicado por electron-builder. La descarga solo comienza tras pulsar el botón.</p>
       </div>
     </div>
   );
@@ -750,7 +776,7 @@ function MacrosPanel({ macros, onChange }: { macros: MacroDefinition[]; onChange
 }
 
 function App() {
-  const [splash, setSplash] = useState(true);
+  const [splash, setSplash] = useState(!new URLSearchParams(window.location.search).has("capture"));
   const [section, setSection] = useState<Section>("displaypad");
   const [state, setState] = useState<BootstrapState | null>(null);
   const [selectedKey, setSelectedKey] = useState(0);
@@ -778,6 +804,9 @@ function App() {
   }, []);
   useEffect(() => { void refresh(); }, []);
   useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => {
+    if (state) window.nexoraDesktop?.ready();
+  }, [state]);
   useEffect(() => window.nexoraDesktop?.onEvent((value) => {
     if (!value || typeof value !== "object" || !("type" in value) || value.type !== "plugin-feedback") return;
     const feedback = value as { event?: string; keyIndex?: number; payload?: { title?: string; image?: string; state?: number } };
@@ -1122,7 +1151,7 @@ function App() {
     <PluginsPanel plugins={state.plugins} catalog={state.pluginCatalog} keys={selectedFolder?.keys ?? activeProfile.keys} selectedKey={selectedKey} onRefresh={refresh} onAssign={assignPluginAction} onOpenInspector={openPropertyInspector} />
   ) : section === "displaypad" ? (
     <EditorWorkspace
-      left={<ActionLibrary
+      library={<ActionLibrary
         profiles={state.profiles}
         folders={activeProfile.folders}
         plugins={state.plugins}
@@ -1138,6 +1167,8 @@ function App() {
           <div className="stage-controls">
             <select aria-label="Perfil activo" value={activeProfile.id} onChange={(event) => { const profile = state.profiles.find((item) => item.id === event.target.value); if (profile) void selectProfile(profile); }}>{state.profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select>
             <StatusPill connected={state.device.connected} mode={state.device.mode} />
+            <button type="button" className="icon-button" title="Plugin Hub" aria-label="Abrir Plugin Hub" onClick={() => setSection("plugins")}><Boxes size={17} /></button>
+            <button type="button" className="icon-button" title="Configuración y actualizaciones" aria-label="Abrir configuración" onClick={() => setSection("settings")}><Settings size={17} /></button>
           </div>
         </div>
         <div className="stage-folder-bar">
@@ -1173,7 +1204,7 @@ function App() {
           <button type="button" className="secondary-button" disabled={state.device.mode !== "hardware" || !state.device.connected} onClick={() => void applyPageToHardware(keysForPage(activeProfile, selectedFolderId)).then(setPluginNotice).catch((error) => setPluginNotice(error instanceof Error ? error.message : String(error)))}><MonitorUp size={15} /> Enviar página</button>
         </div>
       </div>}
-      right={selectedConfig ? <KeyInspector
+      inspector={selectedConfig ? <KeyInspector
         keyConfig={selectedConfig}
         assets={state.assets}
         profiles={state.profiles}
@@ -1215,7 +1246,7 @@ function App() {
   );
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${section === "displaypad" ? "editor-mode" : ""}`}>
       <aside className="sidebar">
         <div className="brand"><img src={bundledAsset("noxoralogo.png")} alt="" /><span>NEXORA</span><small>CONTROL STUDIO</small></div>
         <nav>{navigation.map((item) => <button type="button" key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}><item.icon size={19} /><span>{item.label}</span></button>)}</nav>

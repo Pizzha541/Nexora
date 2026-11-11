@@ -40,6 +40,7 @@ describe("editor DisplayPad", () => {
     fireEvent.click(webAction);
     expect(onAssignNative).toHaveBeenCalledWith(expect.objectContaining({ kind: "openUrl" }));
 
+    fireEvent.click(screen.getByRole("button", { name: "Plugins" }));
     fireEvent.click(screen.getByRole("button", { name: /Crear marcador/ }));
     expect(onAssignPlugin).toHaveBeenCalledWith({ pluginId: plugin.id, actionId: plugin.actions[0].id, settings: {} });
   });

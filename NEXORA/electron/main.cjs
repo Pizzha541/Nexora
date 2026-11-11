@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createPluginService } = require('./plugin-service.cjs');
 const { ObsService } = require('./obs-service.cjs');
+const { createUpdateService } = require('./update-service.cjs');
 
 let window = null;
 let worker = null;
@@ -16,6 +17,7 @@ let activeKeys = null;
 let rendererReady = false;
 let pluginService = null;
 let obsService = null;
+let updateService = null;
 const propertyInspectorWindows = new Map();
 const pending = new Map();
 const buttonEvents = [];
@@ -30,10 +32,15 @@ const windowsLocalData = process.platform === 'win32'
   : app.getPath('appData');
 const dataRoot = path.join(windowsLocalData, 'Nexora', 'NEXORA', 'data');
 app.setPath('userData', dataRoot);
-const instanceLock = app.requestSingleInstanceLock();
-if (!instanceLock) app.quit();
 const smokeTest = process.argv.includes('--smoke-test');
 const rendererSmokeTest = process.argv.includes('--renderer-smoke-test');
+const uiSmokeTest = process.argv.includes('--ui-smoke-test');
+const captureUiArgument = process.argv.find((argument) => argument.startsWith('--capture-ui='));
+const captureUiPath = captureUiArgument ? path.resolve(captureUiArgument.slice('--capture-ui='.length)) : null;
+if (captureUiPath) app.disableHardwareAcceleration();
+const isolatedTestRun = smokeTest || rendererSmokeTest || uiSmokeTest || Boolean(captureUiPath);
+const instanceLock = isolatedTestRun || app.requestSingleInstanceLock();
+if (!instanceLock) app.quit();
 
 function ensureDirectories() {
   for (const directory of ['profiles', 'macros', 'assets', 'backups', 'logs', 'plugins']) {
@@ -432,7 +439,7 @@ async function invoke(command, args) {
         { id: 'discord', name: 'Discord', status: 'unconfigured', detail: 'Módulo oficial/autorizado por definir', priority: 3 },
         { id: 'twitch', name: 'Twitch', status: 'unconfigured', detail: 'Módulo preparado', priority: 4 },
       ],
-      updaterConfigured: false,
+      updaterConfigured: true,
     };
   }
   if (command === 'save_profile') return saveProfile(structuredClone(args.profile));
@@ -497,6 +504,9 @@ async function invoke(command, args) {
     const result = await dialog.showOpenDialog(window || undefined, { properties: ['openFile'], title: 'Seleccionar aplicación o archivo' });
     return result.canceled ? null : result.filePaths[0] || null;
   }
+  if (command === 'update_get_status') return updateService.getStatus();
+  if (command === 'update_check') return updateService.check();
+  if (command === 'update_install') return updateService.install();
   if (command === 'execute_key_action') { await executeKeyAction(structuredClone(args.key), Number(args.keyIndex || 0)); return 'Acción ejecutada.'; }
   if (command === 'import_visual_asset') {
     const extensions = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
@@ -623,7 +633,7 @@ function createWindow(showWhenReady = true) {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   window.removeMenu();
-  window.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'));
+  window.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'), captureUiPath ? { query: { capture: '1' } } : undefined);
   if (showWhenReady) window.once('ready-to-show', () => window.show());
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
@@ -652,6 +662,7 @@ app.whenReady().then(() => {
     openExternal: (url) => shell.openExternal(url),
   });
   obsService = new ObsService({ onEvent: sendEvent, log: appendLog });
+  updateService = createUpdateService({ sendEvent, log: appendLog });
   if (smokeTest) {
     appendLog('smoke-test', `Arranque empaquetado correcto en ${dataRoot}`);
     app.exit(0);
@@ -661,15 +672,40 @@ app.whenReady().then(() => {
     rendererReady = true;
     appendLog('renderer-ready', 'Interfaz React cargada correctamente.');
     if (rendererSmokeTest) app.exit(0);
+    if (captureUiPath && window) {
+      window.showInactive();
+      setTimeout(() => {
+        const capture = async () => {
+          const diagnostics = await window.webContents.executeJavaScript(`({
+            text: document.body.innerText.slice(0, 500),
+            root: document.getElementById('root')?.innerHTML.slice(0, 500),
+            bodyRect: document.body.getBoundingClientRect().toJSON(),
+          })`);
+          appendLog('capture-ui-dom', JSON.stringify(diagnostics));
+          window.webContents.debugger.attach('1.3');
+          await window.webContents.debugger.sendCommand('Page.enable');
+          const result = await window.webContents.debugger.sendCommand('Page.captureScreenshot', {
+            format: 'png',
+            captureBeyondViewport: false,
+            fromSurface: true,
+          });
+          window.webContents.debugger.detach();
+          fs.mkdirSync(path.dirname(captureUiPath), { recursive: true });
+          fs.writeFileSync(captureUiPath, Buffer.from(result.data, 'base64'));
+          app.exit(0);
+        };
+        void capture().catch((error) => { appendLog('capture-ui', error?.stack || error); app.exit(3); });
+      }, 1_500);
+    }
   });
   ipcMain.handle('nexora:invoke', (_event, command, args) => invoke(command, args || {}));
-  if (rendererSmokeTest) {
+  if (rendererSmokeTest || captureUiPath) {
     createWindow(false);
     setTimeout(() => app.exit(rendererReady ? 0 : 2), 15_000).unref();
     return;
   }
   createWindow();
-  startWorker();
+  if (!uiSmokeTest && !captureUiPath) startWorker();
 });
 
 app.on('second-instance', () => {

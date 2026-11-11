@@ -49,7 +49,7 @@ export const localBootstrap: BootstrapState = {
     screensaverEnabled: false,
     screensaverIdleSeconds: 300,
   },
-  updaterConfigured: false,
+  updaterConfigured: true,
   startupWarning: "El backend Tauri no está disponible; se está usando almacenamiento local de emergencia.",
 };
 

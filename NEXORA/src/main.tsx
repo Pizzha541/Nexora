@@ -24,5 +24,4 @@ createRoot(document.getElementById("root")!).render(
 );
 
 document.documentElement.dataset.nexoraReady = "true";
-window.nexoraDesktop?.ready();
 

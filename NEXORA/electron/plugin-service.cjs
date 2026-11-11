@@ -344,8 +344,12 @@ function createPluginService({ dataRoot, log, feedback, settingsChanged, runtime
     const manifestEntry = entries.find((entry) => !entry.isDirectory && normalizeArchivePath(entry.entryName).toLowerCase().endsWith('/manifest.json'))
       || entries.find((entry) => !entry.isDirectory && normalizeArchivePath(entry.entryName).toLowerCase() === 'manifest.json');
     if (!manifestEntry) throw new Error('No se encontró manifest.json.');
+    const manifestBytes = manifestEntry.getData();
+    if (manifestBytes.subarray(0, 6).toString('ascii') === 'ELGATO') {
+      throw new Error('Este paquete está protegido por DRM de Elgato y solo puede descifrarse en Stream Deck. NEXORA no puede ejecutarlo sin autorización del proveedor. Busca una versión abierta o una integración nativa.');
+    }
     let manifest;
-    try { manifest = JSON.parse(manifestEntry.getData().toString('utf8')); } catch { throw new Error('El manifiesto no contiene JSON válido.'); }
+    try { manifest = JSON.parse(manifestBytes.toString('utf8')); } catch { throw new Error('El manifiesto no contiene JSON válido.'); }
     const ecosystem = Array.isArray(manifest.Actions) && manifest.UUID ? 'streamdeck' : manifest.manifestVersion === 1 && manifest.id ? 'macrodeck' : null;
     if (!ecosystem) throw new Error('El manifiesto no corresponde a Stream Deck ni Macro Deck 3.');
     const id = safeSegment(ecosystem === 'streamdeck' ? manifest.UUID : manifest.id);

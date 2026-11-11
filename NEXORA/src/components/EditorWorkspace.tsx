@@ -3,7 +3,6 @@ import {
   AppWindow,
   ChevronDown,
   ChevronLeft,
-  ChevronRight,
   CirclePlay,
   FolderOpen,
   Globe2,
@@ -11,7 +10,6 @@ import {
   Layers3,
   MonitorPlay,
   Music2,
-  PanelLeftClose,
   PanelRightClose,
   PlugZap,
   Radio,
@@ -126,20 +124,17 @@ function buildCategories(
   ].filter((category) => category.actions.length);
 }
 
-export function EditorWorkspace({ left, center, right }: { left: ReactNode; center: ReactNode; right: ReactNode }) {
-  const [leftWidth, setLeftWidth] = useState(220);
-  const [rightWidth, setRightWidth] = useState(260);
-  const [leftOpen, setLeftOpen] = useState(true);
+export function EditorWorkspace({ library, center, inspector }: { library: ReactNode; center: ReactNode; inspector: ReactNode }) {
+  const [rightWidth, setRightWidth] = useState(300);
   const [rightOpen, setRightOpen] = useState(true);
 
-  const resize = (side: "left" | "right", event: ReactPointerEvent) => {
+  const resize = (event: ReactPointerEvent) => {
     event.preventDefault();
     const startX = event.clientX;
-    const initial = side === "left" ? leftWidth : rightWidth;
+    const initial = rightWidth;
     const move = (moveEvent: PointerEvent) => {
       const delta = moveEvent.clientX - startX;
-      const next = Math.max(190, Math.min(390, initial + (side === "left" ? delta : -delta)));
-      if (side === "left") setLeftWidth(next); else setRightWidth(next);
+      setRightWidth(Math.max(250, Math.min(430, initial - delta)));
     };
     const stop = () => {
       window.removeEventListener("pointermove", move);
@@ -150,17 +145,15 @@ export function EditorWorkspace({ left, center, right }: { left: ReactNode; cent
   };
 
   return (
-    <div className="editor-workspace" style={{ "--editor-left": leftOpen ? `${leftWidth}px` : "42px", "--editor-right": rightOpen ? `${rightWidth}px` : "42px" } as React.CSSProperties}>
-      <aside className={`editor-pane editor-left ${leftOpen ? "" : "collapsed"}`}>
-        <button className="pane-collapse" type="button" onClick={() => setLeftOpen((value) => !value)} aria-label={leftOpen ? "Contraer acciones" : "Expandir acciones"}>{leftOpen ? <PanelLeftClose size={17} /> : <ChevronRight size={17} />}</button>
-        {leftOpen && left}
-      </aside>
-      <div className="pane-resizer" onPointerDown={(event) => resize("left", event)} />
-      <section className="editor-center">{center}</section>
-      <div className="pane-resizer" onPointerDown={(event) => resize("right", event)} />
-      <aside className={`editor-pane editor-right ${rightOpen ? "" : "collapsed"}`}>
+    <div className="editor-workspace" style={{ "--editor-right": rightOpen ? `${rightWidth}px` : "42px" } as React.CSSProperties}>
+      <section className="editor-main">
+        <div className="editor-center">{center}</div>
+        <div className="editor-inspector">{inspector}</div>
+      </section>
+      <div className="pane-resizer" onPointerDown={resize} />
+      <aside className={`editor-pane editor-library ${rightOpen ? "" : "collapsed"}`}>
         <button className="pane-collapse" type="button" onClick={() => setRightOpen((value) => !value)} aria-label={rightOpen ? "Contraer propiedades" : "Expandir propiedades"}>{rightOpen ? <PanelRightClose size={17} /> : <ChevronLeft size={17} />}</button>
-        {rightOpen && right}
+        {rightOpen && library}
       </aside>
     </div>
   );
@@ -178,16 +171,20 @@ export function ActionLibrary({ profiles, folders, plugins, obsScenes, obsConnec
 }) {
   const [query, setQuery] = useState("");
   const [closed, setClosed] = useState<Set<string>>(new Set());
+  const [view, setView] = useState<"keys" | "plugins">("keys");
   const categories = buildCategories(profiles, folders, plugins, obsScenes);
   const normalized = query.trim().toLocaleLowerCase("es");
 
   return <div className="action-library">
     <header><span className="eyebrow">BIBLIOTECA</span><h2>Acciones</h2></header>
     <label className="editor-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar acciones" /></label>
-    {!obsConnected && <button type="button" className="obs-disconnected" onClick={onRefreshObs}><Radio size={14} /> Conecta OBS para cargar escenas</button>}
-    {obsConnected && <button type="button" className="library-refresh" onClick={onRefreshObs}><RefreshCw size={13} /> Actualizar escenas</button>}
+    <div className="library-tabs"><button type="button" className={view === "keys" ? "active" : ""} onClick={() => setView("keys")}>Teclas</button><button type="button" className={view === "plugins" ? "active" : ""} onClick={() => setView("plugins")}>Plugins</button></div>
+    {view === "keys" && !obsConnected && <button type="button" className="obs-disconnected" onClick={onRefreshObs}><Radio size={14} /> Conecta OBS para cargar escenas</button>}
+    {view === "keys" && obsConnected && <button type="button" className="library-refresh" onClick={onRefreshObs}><RefreshCw size={13} /> Actualizar escenas</button>}
     <div className="action-categories">
       {categories.map((category) => {
+        const isPlugin = category.id.startsWith("plugin-");
+        if ((view === "plugins") !== isPlugin) return null;
         const actions = category.actions.filter((action) => !normalized || `${action.name} ${action.description} ${category.name}`.toLocaleLowerCase("es").includes(normalized));
         if (!actions.length) return null;
         const isClosed = closed.has(category.id);
