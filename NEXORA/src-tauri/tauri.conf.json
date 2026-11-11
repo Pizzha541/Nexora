@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NEXORA",
+  "version": "0.1.0",
+  "identifier": "com.nexora.controlstudio",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "NEXORA",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1120,
+        "minHeight": 720,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; media-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost ws://127.0.0.1:4455 ws://localhost:4455"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": false,
+    "publisher": "NEXORA",
+    "copyright": "Copyright © 2026 NEXORA",
+    "category": "Utility",
+    "shortDescription": "Control profesional para Mountain DisplayPad",
+    "longDescription": "NEXORA permite personalizar perfiles, teclas, acciones e integraciones del Mountain DisplayPad.",
+    "icon": ["icons/icon.ico"],
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": true,
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser"
+      }
+    }
+  }
+}
+

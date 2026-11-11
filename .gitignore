@@ -1,0 +1,32 @@
+# Dependencies
+**/node_modules/
+
+# Generated frontend, Electron and Rust output
+**/dist/
+**/electron-release/
+**/target/
+NEXORA/src-tauri/gen/
+BUILD/
+
+# Local source material and temporary downloads
+USER_FILES/
+tmp/
+
+# Local state, caches and reports
+**/.cache/
+coverage/
+*.log
+*.tmp
+*.bak
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+

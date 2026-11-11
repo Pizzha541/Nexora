@@ -1,0 +1,74 @@
+{
+  "name": "nexora",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Control profesional para Mountain DisplayPad con imágenes, GIF, perfiles e integraciones.",
+  "author": "NEXORA",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "tauri": "tauri",
+    "desktop": "npm run build && electron .",
+    "desktop:dist": "npm run build && electron-builder --win nsis --x64",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-log": "^2.10.0",
+    "adm-zip": "^0.6.1",
+    "lucide-react": "^0.468.0",
+    "mountain-displaypad": "1.1.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sharp": "^0.35.5",
+    "ws": "^8.22.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^45.3.0",
+    "electron-builder": "^26.0.12",
+    "jsdom": "^25.0.1",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^5.1.0"
+  },
+  "build": {
+    "appId": "com.nexora.controlstudio",
+    "productName": "NEXORA",
+    "artifactName": "NEXORA_${version}_${arch}-setup.${ext}",
+    "directories": {
+      "output": "electron-release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/sharp/**/*",
+      "node_modules/node-hid/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "src-tauri/icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
