@@ -147,6 +147,15 @@ export async function readVisualAsset(assetId: string): Promise<string> {
   return invoke<string>("read_visual_asset", { assetId });
 }
 
+export async function deleteVisualAsset(assetId: string): Promise<void> {
+  localStorage.removeItem(`nexora.asset.${assetId}`);
+  await invoke("delete_visual_asset", { assetId });
+}
+
+export async function importBaseCampAssets(): Promise<{ imported: number; total: number; source: string }> {
+  return invoke("import_basecamp_assets");
+}
+
 export async function saveVisualSettings(visualSettings: VisualSettings): Promise<VisualSettings> {
   try {
     return await invoke<VisualSettings>("save_visual_settings", { visualSettings });

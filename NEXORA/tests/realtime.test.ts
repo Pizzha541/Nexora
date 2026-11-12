@@ -36,6 +36,7 @@ describe("motor de estado en tiempo real", () => {
 
   it("solo acepta imágenes y GIF seguros de hasta 12 MB", () => {
     expect(isSupportedVisualFile({ name: "icon.png", type: "image/png", size: 1024 })).toBe(true);
+    expect(isSupportedVisualFile({ name: "basecamp-icon.svg", type: "image/svg+xml", size: 2048 })).toBe(true);
     expect(isSupportedVisualFile({ name: "payload.exe", type: "image/png", size: 1024 })).toBe(false);
     expect(isSupportedVisualFile({ name: "huge.gif", type: "image/gif", size: 13 * 1024 * 1024 })).toBe(false);
   });

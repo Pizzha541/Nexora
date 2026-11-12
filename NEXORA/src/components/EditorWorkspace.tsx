@@ -223,8 +223,9 @@ const actionLabel = (key: KeyConfig, profiles: Profile[], folders: FolderNode[],
   return labels[action.kind] ?? action.kind;
 };
 
-export function KeyInspector({ keyConfig, assets, profiles, folders, plugins, obsScenes, obsConnected, onChange, onImport, onPickFile, onOpenPluginInspector, onTest }: {
+export function KeyInspector({ keyConfig, assetPreview, assets, profiles, folders, plugins, obsScenes, obsConnected, onChange, onImport, onPickFile, onOpenPluginInspector, onTest }: {
   keyConfig: KeyConfig;
+  assetPreview?: ReactNode;
   assets: VisualAsset[];
   profiles: Profile[];
   folders: FolderNode[];
@@ -245,11 +246,12 @@ export function KeyInspector({ keyConfig, assets, profiles, folders, plugins, ob
 
   return <div className="key-inspector">
     <header><span className="eyebrow">TECLA {keyConfig.index + 1}</span><h2>Propiedades</h2><small>Guardado automático</small></header>
-    <div className="inspector-preview" style={{ "--key-color": keyConfig.color } as React.CSSProperties}>{keyConfig.text || keyConfig.index + 1}</div>
+    <div className={`inspector-preview ${assetPreview ? "has-image" : ""}`} style={{ "--key-color": keyConfig.color } as React.CSSProperties}>{assetPreview}{keyConfig.text && <span className={assetPreview ? "key-text-overlay" : "key-text-only"}>{keyConfig.text}</span>}{!assetPreview && !keyConfig.text && keyConfig.index + 1}</div>
     <label>Nombre<input value={keyConfig.name} maxLength={40} onChange={(event) => onChange({ ...keyConfig, name: event.target.value })} /></label>
     <div className="inspector-row"><label>Texto<input value={keyConfig.text} maxLength={12} onChange={(event) => onChange({ ...keyConfig, text: event.target.value })} /></label><label>Color<input className="color-input" type="color" value={keyConfig.color} onChange={(event) => onChange({ ...keyConfig, color: event.target.value })} /></label></div>
     <label>Imagen o GIF<select value={keyConfig.iconPath ?? ""} onChange={(event) => { const asset = assets.find((item) => item.id === event.target.value); onChange({ ...keyConfig, iconPath: event.target.value || undefined, animated: asset?.animated ?? false }); }}><option value="">Sin imagen</option>{assets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name}{asset.animated ? " · GIF" : ""}</option>)}</select></label>
-    <label className="file-button inspector-file"><ImagePlus size={15} /> Importar imagen o GIF<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => { if (!event.target.files?.length) return; void onImport(event.target.files).then(([asset]) => { if (asset) onChange({ ...keyConfig, iconPath: asset.id, animated: asset.animated }); }); event.target.value = ""; }} /></label>
+    {keyConfig.iconPath && <button type="button" className="secondary-button inspector-wide" onClick={() => onChange({ ...keyConfig, iconPath: undefined, animated: false })}><Trash2 size={14} /> Quitar imagen de esta tecla</button>}
+    <label className="file-button inspector-file"><ImagePlus size={15} /> Importar imagen o GIF<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={(event) => { if (!event.target.files?.length) return; void onImport(event.target.files).then(([asset]) => { if (asset) onChange({ ...keyConfig, iconPath: asset.id, animated: asset.animated }); }); event.target.value = ""; }} /></label>
     <div className="assigned-action"><span>Acción asignada</span><strong>{actionLabel(keyConfig, profiles, folders, plugins)}</strong></div>
     {action.kind === "openUrl" && <label>Dirección web<input value={action.value ?? ""} placeholder="https://…" onChange={(event) => setAction({ value: event.target.value })} /></label>}
     {action.kind === "launchPath" && <label>Aplicación o archivo<div className="path-picker"><input readOnly value={action.value ?? ""} placeholder="Selecciona un archivo" /><button type="button" onClick={() => void onPickFile().then((value) => value && setAction({ value }))}>Examinar</button></div></label>}

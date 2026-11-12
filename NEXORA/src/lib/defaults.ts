@@ -23,7 +23,7 @@ export const createProfile = (name = "Perfil principal"): Profile => ({
 const localProfile = createProfile();
 
 export const localBootstrap: BootstrapState = {
-  version: "0.1.0",
+  version: "0.2.2",
   activeProfileId: localProfile.id,
   profiles: [localProfile],
   macros: [],

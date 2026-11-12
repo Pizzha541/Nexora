@@ -50,6 +50,8 @@ import {
   applyHardwarePage,
   applyInitialScreen,
   importVisualAsset,
+  importBaseCampAssets,
+  deleteVisualAsset,
   readVisualAsset,
   saveVisualSettings,
   executePluginAction,
@@ -181,6 +183,14 @@ function AssetVisual({ assetId, alt = "" }: { assetId: string; alt?: string }) {
   return source ? <img className="asset-visual" src={source} alt={alt} /> : <span className="asset-loading"><LoaderCircle className="spin" size={15} /></span>;
 }
 
+function KeyArtwork({ assetId, image, text, alt }: { assetId?: string; image?: string; text?: string; alt: string }) {
+  const hasImage = Boolean(assetId || image);
+  return <span className={`key-artwork ${hasImage ? "has-image" : ""}`}>
+    {image ? <img className="asset-visual" src={image} alt={alt} /> : assetId ? <AssetVisual assetId={assetId} alt={alt} /> : null}
+    {text && <span className={hasImage ? "key-text-overlay" : "key-text-only"}>{text}</span>}
+  </span>;
+}
+
 type RuntimeKeyFeedback = { title?: string; image?: string; state?: number; disconnected?: boolean };
 
 function KeyGrid({ keys, selected, pressedKeys = new Set(), runtimeFeedback = {}, onSelect, onActivate, onPluginDrop, onNativeDrop, onKeyMove, onAssetDrop, onFileDrop }: {
@@ -261,7 +271,7 @@ function KeyGrid({ keys, selected, pressedKeys = new Set(), runtimeFeedback = {}
           }}
         >
           <span className="key-glow" />
-          <span className="key-content">{feedback?.image ? <img className="asset-visual" src={feedback.image} alt={feedback.title || key.name} /> : key.iconPath ? <AssetVisual assetId={key.iconPath} alt={key.name} /> : (feedback?.title || key.text || key.index + 1)}</span>
+          <span className="key-content"><KeyArtwork assetId={feedback?.image ? undefined : key.iconPath} image={feedback?.image} text={feedback?.title || key.text || (!feedback?.image && !key.iconPath ? String(key.index + 1) : "")} alt={feedback?.title || key.name} /></span>
           <small>{key.name}</small>
           {feedback?.disconnected && <span className="runtime-offline">offline</span>}
         </button>
@@ -283,7 +293,7 @@ function KeyEditor({ keyConfig, assets, hardwareReady, onImport, onApplyHardware
         <button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar editor"><X size={18} /></button>
       </div>
       <div className="key-preview" style={{ "--key-color": keyConfig.color } as React.CSSProperties}>
-        <span>{keyConfig.iconPath ? <AssetVisual assetId={keyConfig.iconPath} alt={keyConfig.name} /> : (keyConfig.text || keyConfig.index + 1)}</span>
+        <KeyArtwork assetId={keyConfig.iconPath} text={keyConfig.text || (!keyConfig.iconPath ? String(keyConfig.index + 1) : "")} alt={keyConfig.name} />
         <small>{keyConfig.name}</small>
       </div>
       <label>Nombre<input value={keyConfig.name} onChange={(e) => onChange({ ...keyConfig, name: e.target.value })} maxLength={40} /></label>
@@ -298,8 +308,9 @@ function KeyEditor({ keyConfig, assets, hardwareReady, onImport, onApplyHardware
           {assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}{asset.animated ? " · GIF" : ""}</option>)}
         </select>
       </label>
+      {keyConfig.iconPath && <button type="button" className="secondary-button" onClick={() => onChange({ ...keyConfig, iconPath: undefined, animated: false })}><X size={15} /> Quitar imagen de esta tecla</button>}
       <label className="file-button"><ImagePlus size={16} /> Importar desde archivo
-        <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => {
+        <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={(event) => {
           if (!event.target.files?.length) return;
           void onImport(event.target.files).then(([asset]) => {
             if (asset) onChange({ ...keyConfig, iconPath: asset.id, animated: asset.animated });
@@ -338,33 +349,40 @@ function KeyEditor({ keyConfig, assets, hardwareReady, onImport, onApplyHardware
   );
 }
 
-function LibraryPanel({ assets, onImport, onAssign }: { assets: VisualAsset[]; onImport: (files: FileList) => Promise<VisualAsset[]>; onAssign: (asset: VisualAsset) => void }) {
+function LibraryPanel({ assets, onImport, onAssign, onDelete, onImportBaseCamp }: { assets: VisualAsset[]; onImport: (files: FileList) => Promise<VisualAsset[]>; onAssign: (asset: VisualAsset) => void; onDelete: (asset: VisualAsset) => Promise<void>; onImportBaseCamp: () => Promise<{ imported: number; total: number; source: string }> }) {
   const [message, setMessage] = useState("");
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(80);
+  const filtered = assets.filter((asset) => asset.name.toLowerCase().includes(query.toLowerCase()));
   return (
     <div className="section-stack">
       <div className="section-title"><span><em>04</em> Biblioteca</span><h1>Recursos visuales reutilizables</h1><p>Importa PNG, JPG, WEBP o GIF una sola vez y reutilízalo en cualquier tecla, carpeta o pantalla inicial.</p></div>
       <div className="library-toolbar glass-card">
         <label className="primary-button file-button"><ImagePlus size={17} /> Importar imágenes o GIF
-          <input multiple type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => {
+          <input multiple type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={(event) => {
             if (!event.target.files?.length) return;
             void onImport(event.target.files).then((items) => setMessage(`${items.length} recurso(s) disponibles.`)).catch((error) => setMessage(String(error)));
             event.target.value = "";
           }} />
         </label>
-        <p>Puedes seleccionar también los iconos que ya tengas en la carpeta de Base Camp. NEXORA los copia a su biblioteca; no depende después de Base Camp.</p>
+        <button type="button" className="secondary-button" onClick={() => { setMessage("Buscando recursos de Base Camp…"); void onImportBaseCamp().then((result) => setMessage(`${result.imported} nuevos; ${result.total} recursos de Base Camp disponibles.`)).catch((error) => setMessage(error instanceof Error ? error.message : String(error))); }}><Download size={16} /> Importar pack de Base Camp</button>
+        <p>NEXORA detecta una instalación legítima o te deja elegir su carpeta. Copia los recursos a la biblioteca local.</p>
         {message && <strong>{message}</strong>}
       </div>
+      <label className="library-search"><Search size={16} /><input value={query} onChange={(event) => { setQuery(event.target.value); setLimit(80); }} placeholder={`Buscar entre ${assets.length} recursos`} /></label>
       <div className="asset-grid">
-        {assets.map((asset) => <article className="asset-card glass-card" key={asset.id} draggable onDragStart={(event) => {
+        {filtered.slice(0, limit).map((asset) => <article className="asset-card glass-card" key={asset.id} draggable onDragStart={(event) => {
           event.dataTransfer.effectAllowed = "copy";
           event.dataTransfer.setData(NEXORA_ASSET_MIME, asset.id);
         }}>
           <div className="asset-preview"><AssetVisual assetId={asset.id} alt={asset.name} />{asset.animated && <span>GIF</span>}</div>
-          <h3>{asset.name}</h3><small>{(asset.sizeBytes / 1024).toFixed(1)} KB · {asset.mimeType.replace("image/", "").toUpperCase()}</small>
+          <h3>{asset.name}</h3><small>{(asset.sizeBytes / 1024).toFixed(1)} KB · {asset.mimeType.replace("image/", "").toUpperCase()} · {asset.source === "basecamp" ? "Base Camp" : "Usuario"}</small>
           <button type="button" className="secondary-button" onClick={() => onAssign(asset)}>Asignar a tecla seleccionada</button>
+          <button type="button" className="danger-button" onClick={() => { if (!window.confirm(`¿Eliminar “${asset.name}” de la biblioteca y quitarla de todas las teclas?`)) return; void onDelete(asset).then(() => setMessage("Recurso eliminado.")).catch((error) => setMessage(error instanceof Error ? error.message : String(error))); }}><Trash2 size={14} /> Eliminar recurso</button>
         </article>)}
-        {!assets.length && <div className="empty-library glass-card"><ImagePlus size={34} /><h2>Tu biblioteca está vacía</h2><p>Admite archivos de hasta 12 MB. Los GIF se previsualizan animados en NEXORA.</p></div>}
+        {!filtered.length && <div className="empty-library glass-card"><ImagePlus size={34} /><h2>{assets.length ? "No hay coincidencias" : "Tu biblioteca está vacía"}</h2><p>Admite PNG, JPG, WEBP, SVG y GIF de hasta 12 MB.</p></div>}
       </div>
+      {filtered.length > limit && <button type="button" className="secondary-button library-more" onClick={() => setLimit((value) => value + 80)}>Mostrar 80 más ({filtered.length - limit} restantes)</button>}
     </div>
   );
 }
@@ -472,6 +490,11 @@ function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign
       <select value={ecosystem} onChange={(event) => setEcosystem(event.target.value)}><option value="all">Todos los ecosistemas</option><option value="streamdeck">Stream Deck</option><option value="macrodeck">Macro Deck</option><option value="nexora">NEXORA</option></select>
       <label className="secondary-button plugin-import"><Upload size={16} /> Importar paquete<input type="file" accept=".streamDeckPlugin,.macroDeckPlugin,.zip" onChange={(event) => { void importPackage(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
     </section>
+    <details className="glass-card plugin-install-guide">
+      <summary><CircleHelp size={17} /> Cómo instalar y usar un plugin</summary>
+      <ol><li>Pulsa <strong>Importar paquete</strong> y elige un ZIP o .streamDeckPlugin abierto y sin DRM.</li><li>Revisa la licencia, procedencia y permisos mostrados por NEXORA.</li><li>Pulsa <strong>Autorizar ejecución</strong> sólo si confías en el desarrollador.</li><li>Arrastra una acción del plugin a una tecla y abre <strong>Configurar</strong> cuando exista Property Inspector.</li></ol>
+      <p><strong>Importante:</strong> los paquetes oficiales de Elgato Marketplace (como Twitch, Discord, Spotify, OBS o Camo) pueden llevar DRM y están hechos para la app Stream Deck. NEXORA los detecta, pero no intenta romper esa protección. Para esos servicios se usan integraciones NEXORA autorizadas o una versión abierta del plugin.</p>
+    </details>
     {message && <p className={`device-message ${/error|no |inválid|fall/i.test(message) ? "error" : "ok"}`}>{message}</p>}
     <section className="glass-card plugin-drop-panel"><div><span className="eyebrow">ASIGNACIÓN RÁPIDA</span><h2>Arrastra una acción hacia una tecla</h2><p>Los ajustes se guardan de forma independiente en cada botón.</p></div><div className="plugin-drop-grid">{keys.map((key) => <button type="button" key={key.index} className={selectedKey === key.index ? "selected" : ""} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_PLUGIN_ACTION_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); try { void onAssign(key.index, JSON.parse(event.dataTransfer.getData(NEXORA_PLUGIN_ACTION_MIME)) as PluginDrop).then(() => setMessage(`Acción asignada a la tecla ${key.index + 1}.`)); } catch { setMessage("La acción arrastrada no es válida."); } }}><strong>{key.index + 1}</strong><span>{key.name}</span></button>)}</div></section>
     <div className="hub-heading"><h2>Catálogo gratuito verificado</h2><span>{catalog.length} disponible</span></div>
@@ -1019,6 +1042,18 @@ function App() {
     return imported;
   };
 
+  const importBaseCampPack = async () => {
+    const result = await importBaseCampAssets();
+    await refresh();
+    return result;
+  };
+
+  const removeVisualAsset = async (asset: VisualAsset) => {
+    await deleteVisualAsset(asset.id);
+    visualAssetCache.delete(asset.id);
+    await refresh();
+  };
+
   const saveInitialScreen = async (visualSettings: VisualSettings) => {
     const saved = await saveVisualSettings(visualSettings);
     setState((current) => current ? { ...current, visualSettings: saved } : current);
@@ -1166,7 +1201,7 @@ function App() {
   if (!state || !activeProfile) return <div className="app-loading"><LoaderCircle className="spin" /> Cargando NEXORA…</div>;
 
   const mainContent = section === "integrations" ? <IntegrationPanel state={state} selectedKey={selectedKey} onRefresh={refresh} onAssign={assignNativeAction} /> : section === "library" ? (
-    <LibraryPanel assets={state.assets} onImport={importAssets} onAssign={assignAssetToSelectedKey} />
+    <LibraryPanel assets={state.assets} onImport={importAssets} onAssign={assignAssetToSelectedKey} onDelete={removeVisualAsset} onImportBaseCamp={importBaseCampPack} />
   ) : section === "initial" ? (
     <InitialScreenPanel assets={state.assets} settings={state.visualSettings} hardwareReady={state.device.mode === "hardware" && state.device.connected} onSave={saveInitialScreen} onApply={applyInitialScreen} />
   ) : section === "plugins" ? (
@@ -1229,6 +1264,7 @@ function App() {
       </div>}
       inspector={selectedConfig ? <KeyInspector
         keyConfig={selectedConfig}
+        assetPreview={selectedConfig.iconPath ? <AssetVisual assetId={selectedConfig.iconPath} alt={selectedConfig.name} /> : undefined}
         assets={state.assets}
         profiles={state.profiles}
         folders={activeProfile.folders}

@@ -25,6 +25,9 @@ const pendingKeySync = new Map();
 let keySyncTimer = null;
 let usbSequence = Promise.resolve();
 let reconnectTimer = null;
+let initialRestoreTimer = null;
+let screensaverTimer = null;
+let screensaverActive = false;
 let shuttingDown = false;
 
 const windowsLocalData = process.platform === 'win32'
@@ -123,6 +126,80 @@ function listJson(directory) {
     .filter(Boolean);
 }
 
+const visualExtensions = new Map([
+  ['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'],
+  ['.webp', 'image/webp'], ['.gif', 'image/gif'], ['.svg', 'image/svg+xml'],
+]);
+
+function baseCampImageRoot(candidate) {
+  if (!candidate || !fs.existsSync(candidate)) return null;
+  const resolved = path.resolve(candidate);
+  const endings = [
+    path.join(resolved, 'resources', 'bin', 'wwwroot', 'images'),
+    path.join(resolved, 'wwwroot', 'images'),
+    path.join(resolved, 'images'),
+    resolved,
+  ];
+  return endings.find((item) => fs.existsSync(item) && fs.statSync(item).isDirectory()) || null;
+}
+
+function detectedBaseCampImageRoot() {
+  const candidates = [];
+  const installationInfo = path.join(process.env.ProgramData || 'C:\\ProgramData', 'Mountain Base Camp', 'InstallationInfo.xml');
+  if (fs.existsSync(installationInfo)) {
+    const match = /<InsatllDirectory>([^<]+)<\/InsatllDirectory>/i.exec(fs.readFileSync(installationInfo, 'utf8'));
+    if (match) candidates.push(match[1].trim());
+  }
+  candidates.push(
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Mountain Base Camp'),
+    path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Mountain Base Camp'),
+    path.resolve(app.getAppPath(), '..', 'USER_FILES', 'device', 'basecamp app original', 'Mountain Base Camp'),
+  );
+  for (const candidate of candidates) {
+    const root = baseCampImageRoot(candidate);
+    if (root) return root;
+  }
+  return null;
+}
+
+function collectVisualFiles(root, limit = 2500) {
+  const files = [];
+  const pending = [path.resolve(root)];
+  while (pending.length && files.length < limit) {
+    const directory = pending.shift();
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) continue;
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory()) pending.push(target);
+      else if (entry.isFile() && visualExtensions.has(path.extname(entry.name).toLowerCase())) files.push(target);
+      if (files.length >= limit) break;
+    }
+  }
+  return files;
+}
+
+function importVisualFiles(files, currentAssets, source = 'basecamp') {
+  const assets = [...currentAssets];
+  let imported = 0;
+  for (const file of files) {
+    const stat = fs.statSync(file);
+    if (!stat.size || stat.size > 12 * 1024 * 1024) continue;
+    const bytes = fs.readFileSync(file);
+    const id = crypto.createHash('sha256').update(bytes).digest('hex');
+    if (assets.some((asset) => asset.id === id)) continue;
+    const extension = path.extname(file).toLowerCase();
+    const fileName = `${id}${extension === '.jpeg' ? '.jpg' : extension}`;
+    fs.copyFileSync(file, path.join(dataRoot, 'assets', fileName));
+    assets.push({
+      id, name: path.basename(file), mimeType: visualExtensions.get(extension), fileName,
+      sizeBytes: stat.size, animated: extension === '.gif', importedAt: new Date().toISOString(), source,
+    });
+    imported += 1;
+  }
+  if (imported) writeJson(path.join(dataRoot, 'assets', 'index.json'), assets);
+  return { assets, imported };
+}
+
 function loadRepository() {
   let profiles = listJson('profiles');
   if (!profiles.length) {
@@ -151,9 +228,18 @@ function loadRepository() {
     settings.activeProfileId = profiles[0].id;
     settingsChanged = true;
   }
-  if (settingsChanged) writeJson(settingsFile, settings);
-  const assets = readJson(path.join(dataRoot, 'assets', 'index.json'), [])
+  let assets = readJson(path.join(dataRoot, 'assets', 'index.json'), [])
     .filter((asset) => fs.existsSync(path.join(dataRoot, 'assets', asset.fileName)));
+  if (!settings.baseCampAssetsImportedFrom) {
+    const baseCampRoot = detectedBaseCampImageRoot();
+    if (baseCampRoot) {
+      const result = importVisualFiles(collectVisualFiles(baseCampRoot), assets);
+      assets = result.assets;
+      settings.baseCampAssetsImportedFrom = baseCampRoot;
+      settingsChanged = true;
+    }
+  }
+  if (settingsChanged) writeJson(settingsFile, settings);
   return { settings, profiles, macros: listJson('macros'), assets };
 }
 
@@ -236,14 +322,18 @@ function handleWorkerMessage(message) {
   if (message.type === 'status') {
     const wasConnected = workerConnected;
     workerConnected = Boolean(message.connected && message.ready !== false);
-    if (!wasConnected && workerConnected) void syncDesiredPage();
+    if (!wasConnected && workerConnected) void syncInitialOrPage();
     if (!workerConnected) scheduleReconnect();
   }
   if (message.type === 'event' && (message.name === 'buttonDown' || message.name === 'buttonUp')) {
     const event = { key: message.key, pressed: message.name === 'buttonDown', timestampMs: Date.now(), rawOffset42: 0, rawOffset47: 0 };
     buttonEvents.push(event);
     if (buttonEvents.length > 512) buttonEvents.shift();
-    if (event.pressed) void runKeyAction(event.key);
+    if (event.pressed && screensaverActive) void wakeScreensaver();
+    else {
+      scheduleScreensaver();
+      if (event.pressed) void runKeyAction(event.key);
+    }
   }
   sendEvent(message);
 }
@@ -256,7 +346,7 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
     const result = await serialWorkerRequest('connect');
-    if (result.ok) await syncDesiredPage();
+    if (result.ok) await syncInitialOrPage();
     else scheduleReconnect();
   }, 2000);
   reconnectTimer.unref();
@@ -295,8 +385,9 @@ async function writeHardwareKey(key) {
   if (!workerConnected) return { ok: true, deferred: true };
   const repository = loadRepository();
   const file = key?.iconPath ? assetPath(key.iconPath, repository) : null;
-  return file
-    ? serialWorkerRequest(key.animated ? 'gifStart' : 'image', { key: key.index + 1, file })
+  const visual = { key: key.index + 1, file, text: String(key.text || ''), color: String(key.color || '#111018') };
+  return (file || visual.text)
+    ? serialWorkerRequest(key.animated && file ? 'gifStart' : 'image', visual)
     : serialWorkerRequest('clear', { key: key.index + 1 });
 }
 
@@ -326,9 +417,52 @@ function queueHardwareKey(key) {
 }
 
 async function syncDesiredPage(repository = loadRepository()) {
-  if (!activeKeys || !workerConnected) return { ok: true, deferred: true };
+  if (!activeKeys || !workerConnected || repository.settings.deviceMode !== 'hardware') return { ok: true, deferred: true };
   cancelPendingKeySync();
-  return serialWorkerRequest('page', { keys: mapHardwareKeys(activeKeys, repository) });
+  const result = await serialWorkerRequest('page', { keys: mapHardwareKeys(activeKeys, repository) });
+  if (result.ok) scheduleScreensaver(repository);
+  return result;
+}
+
+function scheduleScreensaver(repository) {
+  if (screensaverTimer) clearTimeout(screensaverTimer);
+  screensaverTimer = null;
+  const settings = repository?.settings || readJson(path.join(dataRoot, 'settings.json'), { deviceMode: 'simulation', visualSettings: defaultVisualSettings() });
+  const visual = { ...defaultVisualSettings(), ...(settings.visualSettings || {}) };
+  if (!workerConnected || settings.deviceMode !== 'hardware' || !visual.screensaverEnabled || screensaverActive || initialRestoreTimer) return;
+  screensaverTimer = setTimeout(async () => {
+    screensaverTimer = null;
+    const current = loadRepository();
+    const saver = current.settings.visualSettings;
+    if (!workerConnected || current.settings.deviceMode !== 'hardware' || !saver.screensaverEnabled) return;
+    const file = saver.screensaverAssetId ? assetPath(saver.screensaverAssetId, current) : builtinBannerPath();
+    screensaverActive = true;
+    const result = await serialWorkerRequest('startupImage', { file, fit: saver.fit });
+    screensaverActive = Boolean(result.ok);
+  }, Math.max(30, Number(visual.screensaverIdleSeconds || 300)) * 1000);
+  screensaverTimer.unref();
+}
+
+async function wakeScreensaver(repository = loadRepository()) {
+  if (!screensaverActive) { scheduleScreensaver(repository); return; }
+  screensaverActive = false;
+  await syncDesiredPage(repository);
+}
+
+async function syncInitialOrPage(repository = loadRepository()) {
+  if (initialRestoreTimer) clearTimeout(initialRestoreTimer);
+  if (screensaverTimer) clearTimeout(screensaverTimer);
+  initialRestoreTimer = null;
+  screensaverTimer = null;
+  screensaverActive = false;
+  const visual = repository.settings.visualSettings;
+  if (!workerConnected || repository.settings.deviceMode !== 'hardware' || !visual.initialScreenEnabled) return syncDesiredPage(repository);
+  const file = visual.initialAssetId ? assetPath(visual.initialAssetId, repository) : builtinBannerPath();
+  const result = await serialWorkerRequest('startupImage', { file, fit: visual.fit });
+  if (!result.ok) return result;
+  initialRestoreTimer = setTimeout(() => { initialRestoreTimer = null; void syncDesiredPage(); }, Math.max(1, Number(visual.initialDurationSeconds || 5)) * 1000);
+  initialRestoreTimer.unref();
+  return result;
 }
 
 function assetPath(assetId, repository = loadRepository()) {
@@ -349,7 +483,10 @@ function builtinBannerPath() {
 function mapHardwareKeys(keys, repository = loadRepository()) {
   return Array.from({ length: 12 }, (_, index) => {
     const key = keys[index] || {};
-    return { file: key.iconPath ? assetPath(key.iconPath, repository) : null, animated: Boolean(key.animated) };
+    return {
+      file: key.iconPath ? assetPath(key.iconPath, repository) : null,
+      animated: Boolean(key.animated), text: String(key.text || ''), color: String(key.color || '#111018'),
+    };
   });
 }
 
@@ -481,9 +618,16 @@ async function invoke(command, args) {
   if (command === 'set_device_mode') {
     repository.settings.deviceMode = args.mode;
     saveSettings(repository.settings);
+    if (args.mode === 'simulation') {
+      if (initialRestoreTimer) clearTimeout(initialRestoreTimer);
+      if (screensaverTimer) clearTimeout(screensaverTimer);
+      initialRestoreTimer = null;
+      screensaverTimer = null;
+      screensaverActive = false;
+    }
     if (args.mode === 'hardware') {
       await serialWorkerRequest('connect');
-      await syncDesiredPage(repository);
+      await syncInitialOrPage(repository);
     }
     return args.mode === 'simulation'
       ? { connected: true, mode: 'simulation', name: 'DisplayPad simulado' }
@@ -491,7 +635,7 @@ async function invoke(command, args) {
   }
   if (command === 'refresh_device_status') {
     const result = await serialWorkerRequest('connect');
-    if (result.ok) await syncDesiredPage(repository);
+    if (result.ok) await syncInitialOrPage(repository);
     return { connected: Boolean(result.connected || workerConnected), mode: 'hardware', name: 'Mountain DisplayPad', vendorId: 0x3282, productId: 0x0009, lastError: result.ok ? undefined : result.error };
   }
   if (command === 'listen_for_button_events') {
@@ -508,20 +652,59 @@ async function invoke(command, args) {
   if (command === 'update_install') return updateService.install();
   if (command === 'execute_key_action') { await executeKeyAction(structuredClone(args.key), Number(args.keyIndex || 0)); return 'Acción ejecutada.'; }
   if (command === 'import_visual_asset') {
-    const extensions = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+    const extensions = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' };
     const extension = extensions[args.mimeType];
     if (!extension) throw new Error('Formato no admitido.');
     const bytes = Buffer.from(args.base64Data, 'base64');
     if (!bytes.length || bytes.length > 12 * 1024 * 1024) throw new Error('El recurso debe pesar entre 1 byte y 12 MB.');
+    if (extension === 'svg' && /<(script|foreignObject)\b|\bon[a-z]+\s*=|(?:href|src)\s*=\s*["']\s*(?:https?:|file:|javascript:)/i.test(bytes.toString('utf8'))) throw new Error('El SVG contiene código o recursos externos no permitidos.');
     const id = crypto.createHash('sha256').update(bytes).digest('hex');
     const existing = repository.assets.find((asset) => asset.id === id);
     if (existing) return existing;
     const fileName = `${id}.${extension}`;
     fs.writeFileSync(path.join(dataRoot, 'assets', fileName), bytes);
-    const asset = { id, name: String(args.name || fileName).slice(0, 120), mimeType: args.mimeType, fileName, sizeBytes: bytes.length, animated: extension === 'gif', importedAt: new Date().toISOString() };
+    const asset = { id, name: String(args.name || fileName).slice(0, 120), mimeType: args.mimeType, fileName, sizeBytes: bytes.length, animated: extension === 'gif', importedAt: new Date().toISOString(), source: 'user' };
     repository.assets.push(asset);
     writeJson(path.join(dataRoot, 'assets', 'index.json'), repository.assets);
     return asset;
+  }
+  if (command === 'import_basecamp_assets') {
+    let root = detectedBaseCampImageRoot();
+    if (!root) {
+      const choice = await dialog.showOpenDialog(window || undefined, {
+        title: 'Selecciona la carpeta “Mountain Base Camp” o su carpeta de imágenes',
+        properties: ['openDirectory'],
+      });
+      if (choice.canceled || !choice.filePaths[0]) throw new Error('No se seleccionó ninguna carpeta de Base Camp.');
+      root = baseCampImageRoot(choice.filePaths[0]);
+    }
+    if (!root) throw new Error('La carpeta seleccionada no contiene recursos de Base Camp.');
+    const files = collectVisualFiles(root);
+    if (!files.length) throw new Error('La carpeta seleccionada no contiene imágenes compatibles.');
+    const result = importVisualFiles(files, repository.assets);
+    repository.settings.baseCampAssetsImportedFrom = root;
+    saveSettings(repository.settings);
+    return { imported: result.imported, total: result.assets.filter((asset) => asset.source === 'basecamp').length, source: root };
+  }
+  if (command === 'delete_visual_asset') {
+    const asset = repository.assets.find((item) => item.id === args.assetId);
+    if (!asset) return null;
+    const removeFromKeys = (keys) => (keys || []).map((key) => key.iconPath === asset.id ? { ...key, iconPath: undefined, animated: false } : key);
+    const removeFromFolders = (folders) => (folders || []).map((folder) => ({ ...folder, keys: removeFromKeys(folder.keys), children: removeFromFolders(folder.children) }));
+    for (const profile of repository.profiles) {
+      const next = { ...profile, keys: removeFromKeys(profile.keys), folders: removeFromFolders(profile.folders) };
+      saveProfile(next);
+    }
+    if (activeKeys) activeKeys = removeFromKeys(activeKeys);
+    const visual = repository.settings.visualSettings;
+    if (visual.initialAssetId === asset.id) delete visual.initialAssetId;
+    if (visual.screensaverAssetId === asset.id) delete visual.screensaverAssetId;
+    saveSettings(repository.settings);
+    writeJson(path.join(dataRoot, 'assets', 'index.json'), repository.assets.filter((item) => item.id !== asset.id));
+    const file = path.join(dataRoot, 'assets', asset.fileName);
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+    if (workerConnected) await syncDesiredPage(loadRepository());
+    return null;
   }
   if (command === 'read_visual_asset') {
     const asset = repository.assets.find((item) => item.id === args.assetId);
@@ -531,6 +714,7 @@ async function invoke(command, args) {
   if (command === 'save_visual_settings') {
     repository.settings.visualSettings = structuredClone(args.visualSettings);
     saveSettings(repository.settings);
+    scheduleScreensaver(repository);
     return repository.settings.visualSettings;
   }
   if (command === 'plugin_install_package') {
@@ -601,6 +785,8 @@ async function invoke(command, args) {
     if (!workerConnected) return 'Página guardada; se enviará al reconectar el DisplayPad.';
     const result = await serialWorkerRequest('page', { keys: mapHardwareKeys(activeKeys, repository) });
     if (!result.ok) throw new Error(result.error);
+    screensaverActive = false;
+    scheduleScreensaver(repository);
     return 'Página enviada a las doce teclas.';
   }
   if (command === 'hardware_apply_key') {
@@ -613,9 +799,15 @@ async function invoke(command, args) {
   if (command === 'hardware_apply_initial') {
     const assetId = repository.settings.visualSettings.initialAssetId;
     const file = assetId ? assetPath(assetId, repository) : builtinBannerPath();
-    const result = await serialWorkerRequest('startupImage', { file });
+    if (screensaverTimer) clearTimeout(screensaverTimer);
+    screensaverTimer = null;
+    screensaverActive = false;
+    const result = await serialWorkerRequest('startupImage', { file, fit: repository.settings.visualSettings.fit });
     if (!result.ok) throw new Error(result.error);
-    return 'Initial Screen enviada a las doce teclas.';
+    if (initialRestoreTimer) clearTimeout(initialRestoreTimer);
+    initialRestoreTimer = setTimeout(() => { initialRestoreTimer = null; void syncDesiredPage(); }, Math.max(1, Number(repository.settings.visualSettings.initialDurationSeconds || 5)) * 1000);
+    initialRestoreTimer.unref();
+    return `Initial Screen enviada; la página activa volverá en ${repository.settings.visualSettings.initialDurationSeconds || 5} segundos.`;
   }
   if (command === 'test_obs_connection' || command === 'obs_connect') return obsService.connect(args.url, args.password || '');
   if (command === 'obs_action') { await obsService.action(args.action, args.settings || {}); return 'Acción enviada a OBS.'; }

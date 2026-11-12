@@ -68,8 +68,8 @@ export function moveProfileKey(
 }
 
 export function isSupportedVisualFile(file: Pick<File, "name" | "type" | "size">): boolean {
-  const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
-  const allowedExtension = /\.(png|jpe?g|webp|gif)$/i.test(file.name);
+  const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"]);
+  const allowedExtension = /\.(png|jpe?g|webp|gif|svg)$/i.test(file.name);
   return file.size > 0 && file.size <= 12 * 1024 * 1024 && allowedTypes.has(file.type) && allowedExtension;
 }
 

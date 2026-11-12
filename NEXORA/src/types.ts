@@ -140,6 +140,7 @@ export type VisualAsset = {
   sizeBytes: number;
   animated: boolean;
   importedAt: string;
+  source?: "user" | "basecamp" | "nexora";
 };
 
 export type VisualSettings = {
