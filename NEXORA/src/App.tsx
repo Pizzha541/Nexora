@@ -70,6 +70,7 @@ import {
 } from "./lib/backend";
 import type { BootstrapState, ButtonEvent, DeviceMode, FolderNode, InstalledPlugin, KeyConfig, MacroDefinition, PluginActionDefinition, PluginCatalogEntry, Profile, UpdateStatus, VisualAsset, VisualSettings } from "./types";
 import { ActionLibrary, EditorWorkspace, KeyInspector, type NativeActionDrop, type PluginDrop } from "./components/EditorWorkspace";
+import { NATIVE_PLUGINS } from "./lib/nativePlugins";
 import {
   isSupportedVisualFile,
   keysForPage,
@@ -330,10 +331,11 @@ function KeyEditor({ keyConfig, assets, hardwareReady, onImport, onApplyHardware
           <option value="folder">Abrir carpeta</option>
           <option value="macro">Ejecutar macro</option>
           <option value="obs">Acción de OBS</option>
+          <option value="native" disabled={action.kind !== "native"}>Plugin nativo NEXORA</option>
           <option value="plugin" disabled={action.kind !== "plugin"}>Acción de Plugin Hub</option>
         </select>
       </label>
-      {action.kind === "plugin" ? <div className="permission-box"><Boxes size={17} /><div><strong>Acción externa asignada</strong><p>{action.pluginId}<br />{action.actionId}</p></div></div> : action.kind !== "none" && (
+      {action.kind === "plugin" ? <div className="permission-box"><Boxes size={17} /><div><strong>Acción externa asignada</strong><p>{action.pluginId}<br />{action.actionId}</p></div></div> : action.kind === "native" ? <div className="permission-box"><PlugZap size={17} /><div><strong>Plugin nativo NEXORA</strong><p>{keyConfig.name}</p></div></div> : action.kind !== "none" && (
         <label>Valor<input value={action.value ?? ""} onChange={(e) => onChange({ ...keyConfig, actions: [{ ...action, value: e.target.value }] })} placeholder="Configuración de la acción" /></label>
       )}
       <label className="toggle-row"><span><strong>Recurso animado</strong><small>Se validará antes de enviarlo al hardware</small></span><input type="checkbox" checked={keyConfig.animated} onChange={(e) => onChange({ ...keyConfig, animated: e.target.checked })} /></label>
@@ -442,13 +444,14 @@ function InitialScreenPanel({ assets, settings, hardwareReady, onSave, onApply }
   </div>;
 }
 
-function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign, onOpenInspector }: {
+function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign, onAssignNative, onOpenInspector }: {
   plugins: InstalledPlugin[];
   catalog: PluginCatalogEntry[];
   keys: KeyConfig[];
   selectedKey: number;
   onRefresh: () => Promise<void>;
   onAssign: (key: number, value: PluginDrop) => Promise<void>;
+  onAssignNative: (key: number, value: NativeActionDrop) => void;
   onOpenInspector?: (plugin: InstalledPlugin, action: PluginActionDefinition, key: number, settings: Record<string, unknown>) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
@@ -484,11 +487,11 @@ function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   };
   return <div className="section-stack plugin-hub">
-    <div className="section-title"><span><em>06</em> Plugin Hub</span><h1>Acciones externas, bajo control</h1><p>Instala, inspecciona y autoriza plugins gratuitos. Stream Deck usa un runtime WebSocket limitado; Macro Deck 3 se inspecciona con un adaptador separado mientras se completa su protocolo.</p></div>
+    <div className="section-title"><span><em>06</em> Plugin Hub</span><h1>Plugins propios, listos para usar</h1><p>OBS, Spotify, Discord, Twitch y Camo ahora tienen módulos nativos de NEXORA. Los paquetes externos siguen disponibles únicamente como compatibilidad experimental.</p></div>
     <section className="plugin-toolbar glass-card">
       <label className="plugin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar plugins o acciones" /></label>
       <select value={ecosystem} onChange={(event) => setEcosystem(event.target.value)}><option value="all">Todos los ecosistemas</option><option value="streamdeck">Stream Deck</option><option value="macrodeck">Macro Deck</option><option value="nexora">NEXORA</option></select>
-      <label className="secondary-button plugin-import"><Upload size={16} /> Importar paquete<input type="file" accept=".streamDeckPlugin,.macroDeckPlugin,.zip" onChange={(event) => { void importPackage(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
+      <label className="secondary-button plugin-import"><Upload size={16} /> Plugin externo experimental<input type="file" accept=".streamDeckPlugin,.macroDeckPlugin,.zip" onChange={(event) => { void importPackage(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
     </section>
     <details className="glass-card plugin-install-guide">
       <summary><CircleHelp size={17} /> Cómo instalar y usar un plugin</summary>
@@ -496,6 +499,17 @@ function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign
       <p><strong>Importante:</strong> los paquetes oficiales de Elgato Marketplace (como Twitch, Discord, Spotify, OBS o Camo) pueden llevar DRM y están hechos para la app Stream Deck. NEXORA los detecta, pero no intenta romper esa protección. Para esos servicios se usan integraciones NEXORA autorizadas o una versión abierta del plugin.</p>
     </details>
     {message && <p className={`device-message ${/error|no |inválid|fall/i.test(message) ? "error" : "ok"}`}>{message}</p>}
+    <div className="hub-heading"><h2>Plugins nativos NEXORA</h2><span>{NATIVE_PLUGINS.length} incluidos · sin instalación</span></div>
+    <div className="native-plugin-grid">
+      {NATIVE_PLUGINS.filter((plugin) => matches(plugin.name, "nexora")).map((plugin) => <article className="glass-card native-plugin-card" key={plugin.id}>
+        <header><div><span className="ecosystem nexora">NEXORA</span><h2>{plugin.name}</h2></div><span className={`native-plugin-status ${plugin.status}`}>{plugin.status === "ready" ? "Listo" : "Requiere conexión"}</span></header>
+        <p>{plugin.description}</p>
+        <div className="native-plugin-actions">{plugin.actions.map((action) => {
+          const payload: NativeActionDrop = { kind: action.kind, value: action.value, name: `${plugin.name} · ${action.name}`, settings: action.settings };
+          return <div key={action.id}><span><strong>{action.name}</strong><small>{action.description}</small></span><button type="button" className="secondary-button" onClick={() => { onAssignNative(selectedKey, payload); setMessage(`“${action.name}” asignada a la tecla ${selectedKey + 1}.`); }}>Asignar</button><button type="button" className="secondary-button" onClick={() => { const source = keys[selectedKey]; if (!source) return; void executeConfiguredKey({ ...source, actions: [{ kind: action.kind, value: action.value, settings: action.settings }] }).then(setMessage).catch((error) => setMessage(error instanceof Error ? error.message : String(error))); }}><Play size={13} /> Probar</button></div>;
+        })}</div>
+      </article>)}
+    </div>
     <section className="glass-card plugin-drop-panel"><div><span className="eyebrow">ASIGNACIÓN RÁPIDA</span><h2>Arrastra una acción hacia una tecla</h2><p>Los ajustes se guardan de forma independiente en cada botón.</p></div><div className="plugin-drop-grid">{keys.map((key) => <button type="button" key={key.index} className={selectedKey === key.index ? "selected" : ""} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_PLUGIN_ACTION_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); try { void onAssign(key.index, JSON.parse(event.dataTransfer.getData(NEXORA_PLUGIN_ACTION_MIME)) as PluginDrop).then(() => setMessage(`Acción asignada a la tecla ${key.index + 1}.`)); } catch { setMessage("La acción arrastrada no es válida."); } }}><strong>{key.index + 1}</strong><span>{key.name}</span></button>)}</div></section>
     <div className="hub-heading"><h2>Catálogo gratuito verificado</h2><span>{catalog.length} disponible</span></div>
     <div className="plugin-grid">
@@ -821,8 +835,11 @@ function MacrosPanel({ macros, onChange }: { macros: MacroDefinition[]; onChange
 }
 
 function App() {
-  const [splash, setSplash] = useState(!new URLSearchParams(window.location.search).has("capture"));
-  const [section, setSection] = useState<Section>("displaypad");
+  const queryParameters = new URLSearchParams(window.location.search);
+  const requestedSection = queryParameters.get("section") as Section | null;
+  const initialSection: Section = requestedSection && navigation.some((item) => item.id === requestedSection) ? requestedSection : "displaypad";
+  const [splash, setSplash] = useState(!queryParameters.has("capture"));
+  const [section, setSection] = useState<Section>(initialSection);
   const [state, setState] = useState<BootstrapState | null>(null);
   const [selectedKey, setSelectedKey] = useState(0);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
@@ -1205,7 +1222,7 @@ function App() {
   ) : section === "initial" ? (
     <InitialScreenPanel assets={state.assets} settings={state.visualSettings} hardwareReady={state.device.mode === "hardware" && state.device.connected} onSave={saveInitialScreen} onApply={applyInitialScreen} />
   ) : section === "plugins" ? (
-    <PluginsPanel plugins={state.plugins} catalog={state.pluginCatalog} keys={selectedFolder?.keys ?? activeProfile.keys} selectedKey={selectedKey} onRefresh={refresh} onAssign={assignPluginAction} onOpenInspector={openPropertyInspector} />
+    <PluginsPanel plugins={state.plugins} catalog={state.pluginCatalog} keys={selectedFolder?.keys ?? activeProfile.keys} selectedKey={selectedKey} onRefresh={refresh} onAssign={assignPluginAction} onAssignNative={assignNativeAction} onOpenInspector={openPropertyInspector} />
   ) : section === "displaypad" ? (
     <EditorWorkspace
       library={<ActionLibrary
@@ -1307,14 +1324,13 @@ function App() {
   );
 
   return (
-    <div className={`app-shell ${section === "displaypad" ? "editor-mode" : ""}`}>
-      <aside className="sidebar">
-        <div className="brand"><img src={bundledAsset("noxoralogo.png")} alt="" /><span>NEXORA</span><small>CONTROL STUDIO</small></div>
-        <nav>{navigation.map((item) => <button type="button" key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}><item.icon size={19} /><span>{item.label}</span></button>)}</nav>
-        <div className="sidebar-foot"><span>v{state.version}</span><span className="build-dot" /> ALPHA</div>
-      </aside>
+    <div className={`app-shell modern-shell ${section === "displaypad" ? "editor-mode" : ""}`}>
       <main className="main-area">
-        <header><div><span className="breadcrumb">NEXORA / {navigation.find((item) => item.id === section)?.label}</span></div><div className="header-actions"><StatusPill connected={state.device.connected} mode={state.device.mode} /><button className="avatar">NX</button></div></header>
+        <header className="modern-appbar">
+          <button type="button" className="modern-brand" onClick={() => setSection("displaypad")} title="Volver al DisplayPad"><img src={bundledAsset("noxoralogo.png")} alt="" /><span>NEXORA<small>v{state.version}</small></span></button>
+          <nav className="modern-tabs" aria-label="Secciones de NEXORA">{navigation.filter((item) => !["settings", "about"].includes(item.id)).map((item) => <button type="button" key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)} title={item.label}><item.icon size={16} /><span>{item.label}</span></button>)}</nav>
+          <div className="modern-app-actions"><StatusPill connected={state.device.connected} mode={state.device.mode} /><button type="button" className={`icon-button ${section === "settings" ? "active" : ""}`} title="Configuración" onClick={() => setSection("settings")}><Settings size={17} /></button><button type="button" className={`icon-button ${section === "about" ? "active" : ""}`} title="Acerca de" onClick={() => setSection("about")}><CircleHelp size={17} /></button></div>
+        </header>
         {state.startupWarning && <div className="recovery-banner">{state.startupWarning}</div>}
         <div className={`content ${section === "displaypad" ? "editor-content" : ""}`}>{mainContent}</div>
       </main>

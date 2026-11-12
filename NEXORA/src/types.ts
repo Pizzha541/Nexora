@@ -28,6 +28,7 @@ export type ActionKind =
   | "folder"
   | "macro"
   | "obs"
+  | "native"
   | "plugin";
 
 export type KeyAction = {

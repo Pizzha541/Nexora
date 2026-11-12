@@ -40,6 +40,8 @@ const rendererSmokeTest = process.argv.includes('--renderer-smoke-test');
 const uiSmokeTest = process.argv.includes('--ui-smoke-test');
 const captureUiArgument = process.argv.find((argument) => argument.startsWith('--capture-ui='));
 const captureUiPath = captureUiArgument ? path.resolve(captureUiArgument.slice('--capture-ui='.length)) : null;
+const captureSectionArgument = process.argv.find((argument) => argument.startsWith('--capture-section='));
+const captureSection = captureSectionArgument ? captureSectionArgument.slice('--capture-section='.length) : null;
 const isolatedTestRun = smokeTest || rendererSmokeTest || uiSmokeTest || Boolean(captureUiPath);
 const instanceLock = isolatedTestRun || app.requestSingleInstanceLock();
 if (!instanceLock) app.quit();
@@ -508,6 +510,51 @@ function sendMediaKey(value) {
   child.unref();
 }
 
+function sendNativeHotkey(value) {
+  const shortcuts = {
+    'discord.mute': [0x11, 0x10, 0x4D],
+    'discord.deafen': [0x11, 0x10, 0x44],
+  };
+  const keys = shortcuts[value];
+  if (!keys || process.platform !== 'win32') throw new Error('Atajo nativo no compatible en este sistema.');
+  const down = keys.map((key) => `[NXKeys]::keybd_event(${key},0,0,[UIntPtr]::Zero)`).join(';');
+  const up = [...keys].reverse().map((key) => `[NXKeys]::keybd_event(${key},0,2,[UIntPtr]::Zero)`).join(';');
+  const script = `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class NXKeys { [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra); }';${down};Start-Sleep -Milliseconds 45;${up}`;
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true, stdio: 'ignore' });
+  child.unref();
+}
+
+async function executeNativeAction(value) {
+  if (value === 'discord.mute' || value === 'discord.deafen') return sendNativeHotkey(value);
+  const externalTargets = {
+    'discord.open': 'discord://-/channels/@me',
+    'spotify.open': 'spotify:',
+    'twitch.dashboard': 'https://dashboard.twitch.tv/',
+    'twitch.streamManager': 'https://dashboard.twitch.tv/stream-manager',
+    'twitch.following': 'https://www.twitch.tv/directory/following/live',
+    'camo.support': 'https://reincubate.com/support/camo/',
+  };
+  if (externalTargets[value]) { await shell.openExternal(externalTargets[value]); return; }
+  if (value === 'camo.open') {
+    const candidates = [
+      path.join(windowsLocalData, 'Programs', 'Camo Studio', 'Camo Studio.exe'),
+      path.join(windowsLocalData, 'Camo Studio', 'Camo Studio.exe'),
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Camo Studio', 'Camo Studio.exe'),
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Reincubate', 'Camo Studio', 'Camo Studio.exe'),
+      path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Camo Studio', 'Camo Studio.exe'),
+    ];
+    const executable = candidates.find((candidate) => fs.existsSync(candidate));
+    if (!executable) {
+      await shell.openExternal('https://reincubate.com/camo/');
+      throw new Error('Camo Studio no está en una ruta conocida; se abrió su página oficial.');
+    }
+    const error = await shell.openPath(executable);
+    if (error) throw new Error(error);
+    return;
+  }
+  throw new Error('Acción nativa desconocida o no autorizada.');
+}
+
 async function executeKeyAction(key, keyIndex) {
   const action = key?.actions?.[0];
   if (!action || action.kind === 'none') return;
@@ -523,6 +570,8 @@ async function executeKeyAction(key, keyIndex) {
     if (error) throw new Error(error);
   } else if (action.kind === 'media') {
     sendMediaKey(action.value);
+  } else if (action.kind === 'native') {
+    await executeNativeAction(action.value);
   } else if (action.kind === 'plugin') {
     await pluginService.execute(action.pluginId, action.actionId, action.settings || {}, action.contextId, keyIndex);
   } else if (action.kind === 'obs') {
@@ -824,7 +873,7 @@ function createWindow(showWhenReady = true) {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   window.removeMenu();
-  window.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'), captureUiPath ? { query: { capture: '1' } } : undefined);
+  window.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'), captureUiPath ? { query: { capture: '1', ...(captureSection ? { section: captureSection } : {}) } } : undefined);
   if (showWhenReady) window.once('ready-to-show', () => window.show());
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url);

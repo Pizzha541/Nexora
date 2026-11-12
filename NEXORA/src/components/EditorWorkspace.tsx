@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { ActionKind, FolderNode, InstalledPlugin, KeyConfig, Profile, VisualAsset } from "../types";
 import { NEXORA_NATIVE_ACTION_MIME, NEXORA_PLUGIN_ACTION_MIME } from "../lib/realtime";
+import { NATIVE_PLUGINS } from "../lib/nativePlugins";
 
 export type PluginDrop = { pluginId: string; actionId: string; settings: Record<string, unknown> };
 export type NativeActionDrop = {
@@ -84,6 +85,19 @@ function buildCategories(
     })),
   }));
 
+  const nativePluginCategories = NATIVE_PLUGINS.map((plugin) => ({
+    id: `plugin-native-${plugin.id}`,
+    name: plugin.name,
+    icon: <PlugZap size={16} />,
+    actions: plugin.actions.map((action) => ({
+      id: `native-${plugin.id}-${action.id}`,
+      name: action.name,
+      description: action.description,
+      icon: <PlugZap size={16} />,
+      native: nativeAction(action.kind, action.value, `${plugin.name} · ${action.name}`, action.settings),
+    })),
+  }));
+
   return [
     {
       id: "system",
@@ -120,6 +134,7 @@ function buildCategories(
       actions: flattenFolders(folders).map((folder) => ({ id: `folder-${folder.id}`, name: folder.name, description: "Abrir esta carpeta del DisplayPad", icon: <FolderOpen size={16} />, native: nativeAction("folder", folder.id, `Carpeta · ${folder.name}`) })),
     },
     { id: "obs", name: "OBS Studio", icon: <Radio size={16} />, actions: obs },
+    ...nativePluginCategories,
     ...pluginCategories,
   ].filter((category) => category.actions.length);
 }
@@ -219,7 +234,7 @@ const actionLabel = (key: KeyConfig, profiles: Profile[], folders: FolderNode[],
     const plugin = plugins.find((item) => item.id === action.pluginId);
     return `${plugin?.name ?? "Plugin"} · ${plugin?.actions.find((item) => item.id === action.actionId)?.name ?? "Acción"}`;
   }
-  const labels: Partial<Record<ActionKind, string>> = { openUrl: "Abrir página web", launchPath: "Abrir aplicación o archivo", media: "Control multimedia", obs: "OBS Studio" };
+  const labels: Partial<Record<ActionKind, string>> = { openUrl: "Abrir página web", launchPath: "Abrir aplicación o archivo", media: "Control multimedia", obs: "OBS Studio", native: "Plugin nativo NEXORA" };
   return labels[action.kind] ?? action.kind;
 };
 
