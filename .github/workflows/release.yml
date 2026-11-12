@@ -28,8 +28,20 @@ jobs:
         run: npm version $env:GITHUB_REF_NAME.TrimStart('v') --no-git-tag-version --allow-same-version
       - name: Pruebas
         run: npm test
-      - name: Compilar y publicar instalador
-        run: npm run desktop:dist -- --publish always
+      - name: Compilar instalador
+        run: npm run desktop:dist -- --publish never
+      - name: Publicar archivos verificados
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $setup = "electron-release/NEXORA_${version}_x64-setup.exe"
+          $blockmap = "${setup}.blockmap"
+          $metadata = "electron-release/latest.yml"
+          foreach ($file in @($setup, $blockmap, $metadata)) {
+            if (-not (Test-Path -LiteralPath $file)) { throw "Falta el artefacto requerido: $file" }
+          }
+          gh release create $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --title $version --generate-notes
+          gh release upload $env:GITHUB_REF_NAME $setup $blockmap $metadata --repo $env:GITHUB_REPOSITORY --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
