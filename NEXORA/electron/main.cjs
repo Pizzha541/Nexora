@@ -37,7 +37,6 @@ const rendererSmokeTest = process.argv.includes('--renderer-smoke-test');
 const uiSmokeTest = process.argv.includes('--ui-smoke-test');
 const captureUiArgument = process.argv.find((argument) => argument.startsWith('--capture-ui='));
 const captureUiPath = captureUiArgument ? path.resolve(captureUiArgument.slice('--capture-ui='.length)) : null;
-if (captureUiPath) app.disableHardwareAcceleration();
 const isolatedTestRun = smokeTest || rendererSmokeTest || uiSmokeTest || Boolean(captureUiPath);
 const instanceLock = isolatedTestRun || app.requestSingleInstanceLock();
 if (!instanceLock) app.quit();
@@ -680,6 +679,14 @@ app.whenReady().then(() => {
             text: document.body.innerText.slice(0, 500),
             root: document.getElementById('root')?.innerHTML.slice(0, 500),
             bodyRect: document.body.getBoundingClientRect().toJSON(),
+            visibilityState: document.visibilityState,
+            layers: ['body', '#root', '.app-shell', '.main-area', '.content', '.editor-workspace'].map((selector) => {
+              const element = document.querySelector(selector);
+              if (!element) return { selector, missing: true };
+              const style = getComputedStyle(element);
+              return { selector, rect: element.getBoundingClientRect().toJSON(), display: style.display, visibility: style.visibility, opacity: style.opacity, color: style.color, background: style.backgroundColor };
+            }),
+            centerStack: document.elementsFromPoint(innerWidth / 2, innerHeight / 2).map((element) => ({ tag: element.tagName, className: String(element.className || '') })).slice(0, 8),
           })`);
           appendLog('capture-ui-dom', JSON.stringify(diagnostics));
           window.webContents.debugger.attach('1.3');
@@ -706,6 +713,9 @@ app.whenReady().then(() => {
   }
   createWindow();
   if (!uiSmokeTest && !captureUiPath) startWorker();
+  if (app.isPackaged && !uiSmokeTest && !captureUiPath) {
+    setTimeout(() => { void updateService.check().catch((error) => appendLog('updater-auto-check', error?.stack || error)); }, 5_000).unref();
+  }
 });
 
 app.on('second-instance', () => {

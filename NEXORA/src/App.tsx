@@ -703,6 +703,28 @@ function DeviceSettingsPanel({
   );
 }
 
+function AboutPanel({ state, onOpenSettings }: { state: BootstrapState; onOpenSettings: () => void }) {
+  return (
+    <div className="section-stack">
+      <div className="section-title"><span><em>08</em> Acerca de</span><h1>NEXORA Control Studio</h1><p>Control visual independiente para Mountain DisplayPad.</p></div>
+      <div className="glass-card about-card">
+        <div className="about-mark"><img src={bundledAsset("noxoralogo.png")} alt="" /><div><span>NEXORA</span><strong>Versión {state.version}</strong></div></div>
+        <p>Configura teclas, imágenes, GIF, perfiles, carpetas, OBS y plugins compatibles desde una sola interfaz.</p>
+        <dl>
+          <div><dt>Dispositivo</dt><dd>{state.device.name}</dd></div>
+          <div><dt>Modo actual</dt><dd>{state.device.mode === "hardware" ? "Hardware" : "Simulación"}</dd></div>
+          <div><dt>Actualizaciones</dt><dd>{state.updaterConfigured ? "GitHub Releases configurado" : "No configuradas"}</dd></div>
+        </dl>
+        <div className="about-actions">
+          <button type="button" className="primary-button" onClick={onOpenSettings}><Download size={16} /> Buscar actualizaciones</button>
+          <a className="secondary-button" href="https://github.com/Pizzha541/Nexora" target="_blank" rel="noreferrer">Repositorio y versiones</a>
+        </div>
+        <small>NEXORA no está afiliado con Elgato. Los plugins protegidos por DRM requieren autorización de sus proveedores.</small>
+      </div>
+    </div>
+  );
+}
+
 function MacrosPanel({ macros, onChange }: { macros: MacroDefinition[]; onChange: (macros: MacroDefinition[]) => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(macros[0]?.id ?? null);
   const selected = macros.find((macro) => macro.id === selectedId) ?? null;
@@ -1169,6 +1191,7 @@ function App() {
             <StatusPill connected={state.device.connected} mode={state.device.mode} />
             <button type="button" className="icon-button" title="Plugin Hub" aria-label="Abrir Plugin Hub" onClick={() => setSection("plugins")}><Boxes size={17} /></button>
             <button type="button" className="icon-button" title="Configuración y actualizaciones" aria-label="Abrir configuración" onClick={() => setSection("settings")}><Settings size={17} /></button>
+            <button type="button" className="icon-button" title="Acerca de NEXORA" aria-label="Abrir Acerca de" onClick={() => setSection("about")}><CircleHelp size={17} /></button>
           </div>
         </div>
         <div className="stage-folder-bar">
@@ -1228,6 +1251,8 @@ function App() {
     <div className="section-stack"><div className="section-title"><span><em>02</em> Perfiles</span><h1>Contextos que se adaptan</h1><p>Crea perfiles independientes y arrástralos para cambiar su orden.</p></div><div className="profile-actions"><button type="button" className="secondary-button" onClick={() => void duplicateActiveProfile()}><Copy size={16} /> Duplicar activo</button><button type="button" className="danger-button" disabled={state.profiles.length <= 1} onClick={() => void deleteActiveProfile()}><Trash2 size={16} /> Eliminar activo</button></div><div className="profile-grid">{state.profiles.map((profile) => <button type="button" draggable key={profile.id} className={`profile-card ${profile.id === activeProfile.id ? "active" : ""}`} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData(NEXORA_PROFILE_MIME, profile.id); }} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_PROFILE_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); const source = event.dataTransfer.getData(NEXORA_PROFILE_MIME); if (source) reorderProfileCards(source, profile.id); }} onClick={() => void selectProfile(profile)}><Layers3 /><div><h3>{profile.name}</h3><p>{profile.description}</p><small>{profile.keys.length} teclas · {profile.automaticApp || "Manual"}</small></div><ChevronRight /></button>)}<button type="button" className="profile-card new" onClick={() => void addProfile()}><Sparkles /><div><h3>Nuevo perfil</h3><p>Parte de una configuración limpia y segura.</p></div></button></div></div>
   ) : section === "settings" ? (
     <DeviceSettingsPanel state={state} onModeChange={changeMode} onRedetect={redetectDevice} />
+  ) : section === "about" ? (
+    <AboutPanel state={state} onOpenSettings={() => setSection("settings")} />
   ) : (
     <div className="dashboard-grid">
       <section className="hero-card">
