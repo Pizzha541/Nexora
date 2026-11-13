@@ -1,6 +1,6 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { createProfile, localBootstrap } from "./defaults";
-import type { BootstrapState, ButtonEvent, DeviceMode, InstalledPlugin, KeyConfig, MacroDefinition, Profile, UpdateStatus, VisualAsset, VisualSettings } from "../types";
+import type { BootstrapState, ButtonEvent, DeviceMode, InstalledPlugin, KeyConfig, MacroDefinition, ObsCatalog, Profile, UpdateStatus, VisualAsset, VisualSettings } from "../types";
 
 const clone = <T,>(value: T): T => structuredClone(value);
 const invoke = <T,>(command: string, args?: Record<string, unknown>): Promise<T> =>
@@ -89,6 +89,10 @@ export async function executeObsAction(action: string, settings: Record<string, 
 
 export async function getObsScenes(): Promise<{ current: string; scenes: string[] }> {
   return invoke("obs_get_scenes");
+}
+
+export async function getObsCatalog(): Promise<ObsCatalog> {
+  return invoke("obs_get_catalog");
 }
 
 export async function pickFile(): Promise<string | undefined> {

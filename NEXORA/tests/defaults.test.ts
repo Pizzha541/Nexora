@@ -11,6 +11,14 @@ describe("perfil inicial", () => {
 
   it("crea acciones inertes por defecto", () => {
     expect(createKey(4).actions).toEqual([{ kind: "none" }]);
+    expect(createKey(4).text).toBe("");
+    expect(createKey(4).color).toBe("#000000");
+  });
+
+  it("incluye un perfil demostrativo de OBS y Twitch configurable", () => {
+    const profile = createProfile("Demo");
+    expect(profile.keys.filter((key) => key.actions[0].kind === "obs")).toHaveLength(10);
+    expect(profile.keys.filter((key) => key.actions[0].kind === "native")).toHaveLength(2);
   });
 });
 

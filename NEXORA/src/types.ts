@@ -27,6 +27,9 @@ export type ActionKind =
   | "profile"
   | "folder"
   | "macro"
+  | "delay"
+  | "multiAction"
+  | "multiSwitch"
   | "obs"
   | "native"
   | "plugin";
@@ -39,6 +42,13 @@ export type KeyAction = {
   actionId?: string;
   contextId?: string;
   settings?: Record<string, unknown>;
+  steps?: SequenceStep[];
+  states?: [SequenceStep[], SequenceStep[]];
+};
+
+export type SequenceStep = {
+  id: string;
+  action: KeyAction;
 };
 
 export type PluginActionDefinition = {
@@ -131,6 +141,18 @@ export type IntegrationState = {
   status: "connected" | "disconnected" | "unconfigured" | "unavailable";
   detail: string;
   priority: number;
+};
+
+export type ObsCatalog = {
+  currentScene: string;
+  scenes: string[];
+  inputs: string[];
+  profiles: string[];
+  sceneCollections: string[];
+  transitions: string[];
+  hotkeys: string[];
+  sceneItems: Array<{ sceneName: string; sceneItemId: number; sourceName: string }>;
+  filters: Array<{ sourceName: string; filterName: string }>;
 };
 
 export type VisualAsset = {

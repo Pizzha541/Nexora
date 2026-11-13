@@ -58,6 +58,7 @@ import {
   executeObsAction,
   executeConfiguredKey,
   getObsScenes,
+  getObsCatalog,
   getUpdateStatus,
   checkForAppUpdate,
   installAppUpdate,
@@ -68,7 +69,7 @@ import {
   setPluginExecutionApproval,
   uninstallPlugin,
 } from "./lib/backend";
-import type { BootstrapState, ButtonEvent, DeviceMode, FolderNode, InstalledPlugin, KeyConfig, MacroDefinition, PluginActionDefinition, PluginCatalogEntry, Profile, UpdateStatus, VisualAsset, VisualSettings } from "./types";
+import type { BootstrapState, ButtonEvent, DeviceMode, FolderNode, InstalledPlugin, KeyAction, KeyConfig, MacroDefinition, ObsCatalog, PluginActionDefinition, PluginCatalogEntry, Profile, UpdateStatus, VisualAsset, VisualSettings } from "./types";
 import { ActionLibrary, EditorWorkspace, KeyInspector, type NativeActionDrop, type PluginDrop } from "./components/EditorWorkspace";
 import { NATIVE_PLUGINS } from "./lib/nativePlugins";
 import {
@@ -88,6 +89,7 @@ import {
 } from "./lib/realtime";
 
 type Section = "dashboard" | "displaypad" | "profiles" | "library" | "initial" | "macros" | "integrations" | "plugins" | "settings" | "about";
+const EMPTY_OBS_CATALOG: ObsCatalog = { currentScene: "", scenes: [], inputs: [], profiles: [], sceneCollections: [], transitions: [], hotkeys: [], sceneItems: [], filters: [] };
 const bundledAsset = (name: string) => `${import.meta.env.BASE_URL}assets/${name}`;
 const visualAssetCache = new Map<string, Promise<string>>();
 const cachedVisualAsset = (assetId: string) => {
@@ -184,10 +186,25 @@ function AssetVisual({ assetId, alt = "" }: { assetId: string; alt?: string }) {
   return source ? <img className="asset-visual" src={source} alt={alt} /> : <span className="asset-loading"><LoaderCircle className="spin" size={15} /></span>;
 }
 
-function KeyArtwork({ assetId, image, text, alt }: { assetId?: string; image?: string; text?: string; alt: string }) {
+function DefaultActionIcon({ action, state }: { action?: KeyAction; state?: number }) {
+  if (!action || action.kind === "none") return null;
+  const Icon = action.kind === "obs" ? (action.value === "screenshot" ? ImagePlus : action.value === "scene" || action.value === "previewScene" ? ScreenShare : Radio)
+    : action.kind === "multiAction" || action.kind === "multiSwitch" || action.kind === "macro" ? Workflow
+    : action.kind === "media" ? Play
+    : action.kind === "profile" ? Layers3
+    : action.kind === "folder" ? FolderTree
+    : action.kind === "plugin" ? Boxes
+    : action.kind === "launchPath" ? PackageOpen
+    : action.kind === "openUrl" ? ScreenShare
+    : PlugZap;
+  return <span className={`default-action-icon action-${action.kind}`}><Icon size={34} />{action.kind === "multiSwitch" && <b>{(state ?? 0) + 1}</b>}</span>;
+}
+
+function KeyArtwork({ assetId, image, text, alt, action, state }: { assetId?: string; image?: string; text?: string; alt: string; action?: KeyAction; state?: number }) {
   const hasImage = Boolean(assetId || image);
-  return <span className={`key-artwork ${hasImage ? "has-image" : ""}`}>
+  return <span className={`key-artwork ${hasImage ? "has-image" : ""} ${action && action.kind !== "none" ? "has-action" : ""}`}>
     {image ? <img className="asset-visual" src={image} alt={alt} /> : assetId ? <AssetVisual assetId={assetId} alt={alt} /> : null}
+    {!hasImage && <DefaultActionIcon action={action} state={state} />}
     {text && <span className={hasImage ? "key-text-overlay" : "key-text-only"}>{text}</span>}
   </span>;
 }
@@ -216,12 +233,14 @@ function KeyGrid({ keys, selected, pressedKeys = new Set(), runtimeFeedback = {}
     <div className="key-grid" aria-label="Teclas del DisplayPad">
       {keys.map((key) => {
         const feedback = runtimeFeedback[key.index];
+        const action = key.actions[0];
+        const empty = !action || action.kind === "none";
         return (
         <button
           type="button"
           key={key.index}
           draggable
-          className={`device-key ${selected === key.index ? "selected" : ""} ${pressedKeys.has(key.index) ? "pressed" : ""} ${dropTarget === key.index ? (dropInvalid ? "drop-invalid" : "drop-valid") : ""}`}
+          className={`device-key ${empty ? "empty" : "configured"} ${selected === key.index ? "selected" : ""} ${pressedKeys.has(key.index) ? "pressed" : ""} ${dropTarget === key.index ? (dropInvalid ? "drop-invalid" : "drop-valid") : ""}`}
           style={{ "--key-color": key.color } as React.CSSProperties}
           onClick={() => onSelect(key.index)}
           onDoubleClick={() => onActivate?.(key.index)}
@@ -271,9 +290,9 @@ function KeyGrid({ keys, selected, pressedKeys = new Set(), runtimeFeedback = {}
             } catch { setDropInvalid(true); }
           }}
         >
-          <span className="key-glow" />
-          <span className="key-content"><KeyArtwork assetId={feedback?.image ? undefined : key.iconPath} image={feedback?.image} text={feedback?.title || key.text || (!feedback?.image && !key.iconPath ? String(key.index + 1) : "")} alt={feedback?.title || key.name} /></span>
-          <small>{key.name}</small>
+          {!empty && <span className="key-glow" />}
+          <span className="key-content"><KeyArtwork assetId={empty || feedback?.image ? undefined : key.iconPath} image={empty ? undefined : feedback?.image} text={empty ? "" : feedback?.title || key.text} alt={feedback?.title || key.name} action={empty ? undefined : action} state={feedback?.state} /></span>
+          {!empty && <small>{key.name}</small>}
           {feedback?.disconnected && <span className="runtime-offline">offline</span>}
         </button>
       );})}
@@ -294,7 +313,7 @@ function KeyEditor({ keyConfig, assets, hardwareReady, onImport, onApplyHardware
         <button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar editor"><X size={18} /></button>
       </div>
       <div className="key-preview" style={{ "--key-color": keyConfig.color } as React.CSSProperties}>
-        <KeyArtwork assetId={keyConfig.iconPath} text={keyConfig.text || (!keyConfig.iconPath ? String(keyConfig.index + 1) : "")} alt={keyConfig.name} />
+        <KeyArtwork assetId={keyConfig.iconPath} text={keyConfig.text} alt={keyConfig.name} action={action} />
         <small>{keyConfig.name}</small>
       </div>
       <label>Nombre<input value={keyConfig.name} onChange={(e) => onChange({ ...keyConfig, name: e.target.value })} maxLength={40} /></label>
@@ -506,7 +525,9 @@ function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign
         <p>{plugin.description}</p>
         <div className="native-plugin-actions">{plugin.actions.map((action) => {
           const payload: NativeActionDrop = { kind: action.kind, value: action.value, name: `${plugin.name} · ${action.name}`, settings: action.settings };
-          return <div key={action.id}><span><strong>{action.name}</strong><small>{action.description}</small></span><button type="button" className="secondary-button" onClick={() => { onAssignNative(selectedKey, payload); setMessage(`“${action.name}” asignada a la tecla ${selectedKey + 1}.`); }}>Asignar</button><button type="button" className="secondary-button" onClick={() => { const source = keys[selectedKey]; if (!source) return; void executeConfiguredKey({ ...source, actions: [{ kind: action.kind, value: action.value, settings: action.settings }] }).then(setMessage).catch((error) => setMessage(error instanceof Error ? error.message : String(error))); }}><Play size={13} /> Probar</button></div>;
+          const configurable = Boolean(action.fields?.length);
+          const needsConfiguration = Boolean(action.fields?.some((field) => field.required && !action.settings?.[field.key]));
+          return <div key={action.id}><span><strong>{action.name}</strong><small>{action.description}{configurable ? " · Configurable por tecla" : ""}</small></span><button type="button" className="secondary-button" onClick={() => { onAssignNative(selectedKey, payload); setMessage(`“${action.name}” asignada a la tecla ${selectedKey + 1}.${configurable ? " Configúrala en las propiedades de DisplayPad." : ""}`); }}>Asignar</button><button type="button" className="secondary-button" disabled={needsConfiguration} title={needsConfiguration ? "Asigna la acción y completa sus propiedades" : "Probar acción"} onClick={() => { const source = keys[selectedKey]; if (!source) return; void executeConfiguredKey({ ...source, actions: [{ kind: action.kind, value: action.value, settings: action.settings }] }).then(setMessage).catch((error) => setMessage(error instanceof Error ? error.message : String(error))); }}><Play size={13} /> Probar</button></div>;
         })}</div>
       </article>)}
     </div>
@@ -609,7 +630,6 @@ function DisplayPadPanel({
 function IntegrationPanel({ state, selectedKey, onRefresh, onAssign }: { state: BootstrapState; selectedKey: number; onRefresh: () => void; onAssign: (key: number, value: NativeActionDrop) => void }) {
   const [url, setUrl] = useState("ws://127.0.0.1:4455");
   const [password, setPassword] = useState("");
-  const [sceneName, setSceneName] = useState("");
   const [result, setResult] = useState("");
   const [testing, setTesting] = useState(false);
 
@@ -620,15 +640,7 @@ function IntegrationPanel({ state, selectedKey, onRefresh, onAssign }: { state: 
     catch (error) { setResult(error instanceof Error ? error.message : String(error)); }
     finally { setTesting(false); setPassword(""); }
   };
-  const obsActions: Array<{ value: string; name: string; settings?: Record<string, unknown> }> = [
-    { value: "scene", name: "Cambiar escena", settings: { sceneName } },
-    { value: "recordStart", name: "Iniciar grabación" },
-    { value: "recordStop", name: "Detener grabación" },
-    { value: "recordPause", name: "Pausar grabación" },
-    { value: "recordResume", name: "Reanudar grabación" },
-    { value: "streamStart", name: "Iniciar streaming" },
-    { value: "streamStop", name: "Detener streaming" },
-  ];
+  const obsActions = NATIVE_PLUGINS.find((plugin) => plugin.id === "obs")?.actions ?? [];
 
   return (
     <div className="section-stack">
@@ -642,9 +654,10 @@ function IntegrationPanel({ state, selectedKey, onRefresh, onAssign }: { state: 
               <span className={`mini-state ${integration.status}`}>{integration.status}</span>
             </article>
           ))}
-          <section className="glass-card obs-action-library"><span className="eyebrow">ACCIONES OBS</span><h2>Arrastra hacia una tecla</h2><label>Escena para «Cambiar escena»<input value={sceneName} onChange={(event) => setSceneName(event.target.value)} placeholder="Nombre exacto en OBS" /></label>{obsActions.map((action) => {
+          <section className="glass-card obs-action-library"><span className="eyebrow">ACCIONES OBS</span><h2>Control completo WebSocket 5.x</h2><p>Asigna una acción y completa sus propiedades desde el inspector de DisplayPad.</p>{obsActions.map((action) => {
             const payload: NativeActionDrop = { kind: "obs", value: action.value, name: action.name, settings: action.settings };
-            return <div className="native-action-row" draggable key={action.value} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(NEXORA_NATIVE_ACTION_MIME, JSON.stringify(payload)); }}><strong>{action.name}</strong><button type="button" className="secondary-button" onClick={() => onAssign(selectedKey, payload)}>Tecla {selectedKey + 1}</button><button type="button" className="secondary-button" disabled={state.integrations[0]?.status !== "connected" || (action.value === "scene" && !sceneName.trim())} onClick={() => { void executeObsAction(action.value, action.settings).then(setResult).catch((error) => setResult(error instanceof Error ? error.message : String(error))); }}><Play size={14} /> Probar</button></div>;
+            const needsConfiguration = Boolean(action.fields?.some((field) => field.required && !action.settings?.[field.key]));
+            return <div className="native-action-row" draggable key={action.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(NEXORA_NATIVE_ACTION_MIME, JSON.stringify(payload)); }}><span><strong>{action.name}</strong>{action.fields?.length ? <small>Configurable</small> : null}</span><button type="button" className="secondary-button" onClick={() => { onAssign(selectedKey, payload); setResult(`“${action.name}” asignada. Configúrala en DisplayPad.`); }}>Tecla {selectedKey + 1}</button><button type="button" className="secondary-button" disabled={state.integrations[0]?.status !== "connected" || needsConfiguration} onClick={() => { void executeObsAction(action.value, action.settings).then(setResult).catch((error) => setResult(error instanceof Error ? error.message : String(error))); }}><Play size={14} /> Probar</button></div>;
           })}</section>
         </div>
         <div className="obs-config glass-card">
@@ -849,6 +862,7 @@ function App() {
   const [runtimeFeedback, setRuntimeFeedback] = useState<Record<number, RuntimeKeyFeedback>>({});
   const [pressedKeys, setPressedKeys] = useState<Set<number>>(new Set());
   const [obsScenes, setObsScenes] = useState<string[]>([]);
+  const [obsCatalog, setObsCatalog] = useState<ObsCatalog>(EMPTY_OBS_CATALOG);
   const stateRef = useRef<BootstrapState | null>(null);
   const dirtyProfiles = useRef(new Map<string, Profile>());
   const saveTimer = useRef<number | null>(null);
@@ -856,11 +870,13 @@ function App() {
   const refresh = async () => setState(await getBootstrapState());
   const loadObsScenes = useCallback(async () => {
     try {
-      const result = await getObsScenes();
-      setObsScenes(result.scenes);
-      return result;
+      const [result, catalog] = await Promise.all([getObsScenes(), getObsCatalog()]);
+      setObsScenes(catalog.scenes.length ? catalog.scenes : result.scenes);
+      setObsCatalog(catalog);
+      return { ...result, scenes: catalog.scenes.length ? catalog.scenes : result.scenes };
     } catch {
       setObsScenes([]);
+      setObsCatalog(EMPTY_OBS_CATALOG);
       return undefined;
     }
   }, []);
@@ -966,12 +982,13 @@ function App() {
     if (value.type === "obs-status") {
       const event = value as { connected?: boolean };
       setState((current) => current ? { ...current, integrations: current.integrations.map((integration) => integration.id === "obs" ? { ...integration, status: event.connected ? "connected" : "disconnected" } : integration) } : current);
-      if (event.connected) void loadObsScenes(); else setObsScenes([]);
+      if (event.connected) void loadObsScenes(); else { setObsScenes([]); setObsCatalog(EMPTY_OBS_CATALOG); }
       return;
     }
     if (value.type === "obs-event") {
       const event = value as { eventType?: string };
-      if (event.eventType === "SceneListChanged" || event.eventType === "CurrentProgramSceneChanged") void loadObsScenes();
+      const catalogEvents = new Set(["SceneListChanged", "InputCreated", "InputRemoved", "InputNameChanged", "SceneItemCreated", "SceneItemRemoved", "SceneItemListReindexed", "SourceFilterCreated", "SourceFilterRemoved", "SourceFilterNameChanged", "ProfileListChanged", "SceneCollectionListChanged", "CurrentSceneCollectionChanged", "SceneTransitionCreated", "SceneTransitionRemoved", "SceneTransitionNameChanged"]);
+      if (event.eventType && catalogEvents.has(event.eventType)) void loadObsScenes();
       return;
     }
     if (value.type === "plugin-runtime-status") {
@@ -1134,7 +1151,7 @@ function App() {
     const configured: KeyConfig = {
       ...currentKey,
       name: action.name.slice(0, 60),
-      text: action.name.slice(0, 6).toUpperCase(),
+      text: "",
       actions: [{ kind: "plugin", pluginId: plugin.id, actionId: action.id, contextId: crypto.randomUUID(), settings: value.settings }],
     };
     commitProfile(updateProfileKey(activeProfile, selectedFolderId, configured), [configured]);
@@ -1148,8 +1165,8 @@ function App() {
     const configured: KeyConfig = {
       ...key,
       name: value.name.slice(0, 60),
-      text: value.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 6).toUpperCase(),
-      actions: [{ kind: value.kind, value: value.value, settings: value.settings || {} }],
+      text: "",
+      actions: [{ kind: value.kind, value: value.value, settings: value.settings || {}, steps: value.steps, states: value.states, ...(["multiAction", "multiSwitch"].includes(value.kind) ? { contextId: crypto.randomUUID() } : {}) }],
     };
     commitProfile(updateProfileKey(activeProfile, selectedFolderId, configured), [configured]);
     setSelectedKey(keyIndex);
@@ -1197,7 +1214,7 @@ function App() {
     if (!state || !activeProfile) return;
     const name = window.prompt(selectedFolderId ? "Nombre de la subcarpeta" : "Nombre de la carpeta", `Carpeta ${activeProfile.folders.length + 1}`)?.trim();
     if (!name) return;
-    const folder: FolderNode = { id: crypto.randomUUID(), name, keys: Array.from({ length: 12 }, (_, index) => ({ index, name: `Tecla ${index + 1}`, color: ["#8b5cf6", "#6d28d9", "#4c1d95", "#7c3aed"][index % 4], text: `${index + 1}`, animated: false, actions: [{ kind: "none" }] })), children: [] };
+    const folder: FolderNode = { id: crypto.randomUUID(), name, keys: Array.from({ length: 12 }, (_, index) => ({ index, name: `Tecla ${index + 1}`, color: "#000000", text: "", animated: false, actions: [{ kind: "none" }] })), children: [] };
     const updatedProfile = selectedFolderId
       ? { ...activeProfile, folders: updateFolderTree(activeProfile.folders, selectedFolderId, (parent) => ({ ...parent, children: [...parent.children, folder] })) }
       : { ...activeProfile, folders: [...activeProfile.folders, folder] };
@@ -1286,7 +1303,7 @@ function App() {
         profiles={state.profiles}
         folders={activeProfile.folders}
         plugins={state.plugins}
-        obsScenes={obsScenes}
+        obsCatalog={obsCatalog}
         obsConnected={state.integrations.some((integration) => integration.id === "obs" && integration.status === "connected")}
         onChange={updateKey}
         onImport={importAssets}

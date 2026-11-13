@@ -5,11 +5,12 @@ import { isSupportedVisualFile, moveFolder, moveProfileKey, reorderProfiles, upd
 describe("motor de estado en tiempo real", () => {
   it("actualiza una tecla sin mutar el perfil anterior", () => {
     const profile = createProfile("Tiempo real");
+    const originalName = profile.keys[3].name;
     const updated = updateProfileKey(profile, null, { ...profile.keys[3], name: "OBS", text: "LIVE" });
 
     expect(updated.keys[3].name).toBe("OBS");
     expect(updated.keys[3].text).toBe("LIVE");
-    expect(profile.keys[3].name).toBe("Tecla 4");
+    expect(profile.keys[3].name).toBe(originalName);
   });
 
   it("intercambia configuraciones completas y conserva los índices físicos", () => {

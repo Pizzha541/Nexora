@@ -7,14 +7,21 @@ export const NEXORA_FOLDER_MIME = "application/x-nexora-folder";
 export const NEXORA_PROFILE_MIME = "application/x-nexora-profile";
 export const NEXORA_NATIVE_ACTION_MIME = "application/x-nexora-native-action";
 
+const cloneAction = (action: import("../types").KeyAction): import("../types").KeyAction => ({
+  ...structuredClone(action),
+  contextId: ["plugin", "multiAction", "multiSwitch"].includes(action.kind) ? crypto.randomUUID() : action.contextId,
+  settings: action.settings ? structuredClone(action.settings) : undefined,
+  steps: action.steps?.map((step) => ({ ...step, id: crypto.randomUUID(), action: cloneAction(step.action) })),
+  states: action.states ? [
+    action.states[0].map((step) => ({ ...step, id: crypto.randomUUID(), action: cloneAction(step.action) })),
+    action.states[1].map((step) => ({ ...step, id: crypto.randomUUID(), action: cloneAction(step.action) })),
+  ] : undefined,
+});
+
 const cloneKeyAt = (key: KeyConfig, index: number): KeyConfig => ({
   ...structuredClone(key),
   index,
-  actions: key.actions.map((action) => ({
-    ...action,
-    contextId: action.kind === "plugin" ? crypto.randomUUID() : action.contextId,
-    settings: action.settings ? structuredClone(action.settings) : undefined,
-  })),
+  actions: key.actions.map(cloneAction),
 });
 
 const updateFolder = (

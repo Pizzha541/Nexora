@@ -1,7 +1,7 @@
 {
   "name": "nexora",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Control profesional para Mountain DisplayPad con imágenes, GIF, perfiles e integraciones.",
   "author": "NEXORA",
   "main": "electron/main.cjs",
@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest run && node tests/plugin-security.cjs && node electron/usb-worker.cjs --render-self-test",
+    "test": "vitest run && node tests/plugin-security.cjs && node tests/obs-service-poc.cjs && node electron/usb-worker.cjs --render-self-test",
     "test:watch": "vitest",
     "tauri": "tauri",
     "desktop": "npm run build && electron .",

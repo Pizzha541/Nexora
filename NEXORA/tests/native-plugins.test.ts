@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NATIVE_PLUGINS } from "../src/lib/nativePlugins";
+import { findNativeAction, NATIVE_PLUGINS } from "../src/lib/nativePlugins";
 
 describe("native NEXORA plugins", () => {
   it("ships the five first-party integrations with safe actions", () => {
@@ -9,5 +9,21 @@ describe("native NEXORA plugins", () => {
       expect(new Set(plugin.actions.map((action) => action.id)).size).toBe(plugin.actions.length);
       expect(plugin.actions.every((action) => !["plugin", "none"].includes(action.kind))).toBe(true);
     }
+  });
+
+  it("covers the complete configurable OBS control surface", () => {
+    const obs = NATIVE_PLUGINS.find((plugin) => plugin.id === "obs");
+    expect(obs?.actions.length).toBeGreaterThanOrEqual(25);
+    expect(obs?.actions.map((action) => action.value)).toEqual(expect.arrayContaining([
+      "recordToggle", "recordChapter", "virtualCameraToggle", "scene", "profile", "sceneCollection",
+      "inputMuteToggle", "inputVolume", "streamToggle", "studioModeToggle", "sourceVisibilityToggle",
+      "filterToggle", "replayBufferToggle", "replayBufferSave", "mediaAction", "transition",
+      "sceneTransitionOverride", "screenshot", "hotkey",
+    ]));
+    expect(obs?.actions.filter((action) => action.fields?.length).length).toBeGreaterThanOrEqual(12);
+  });
+
+  it("resolves variants that share the same OBS request", () => {
+    expect(findNativeAction("obs", "mediaAction", { mediaAction: "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_NEXT" })?.id).toBe("media-next");
   });
 });

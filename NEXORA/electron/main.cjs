@@ -22,6 +22,8 @@ const propertyInspectorWindows = new Map();
 const pending = new Map();
 const buttonEvents = [];
 const pendingKeySync = new Map();
+const longPressTimers = new Map();
+const multiSwitchStates = new Map();
 let keySyncTimer = null;
 let usbSequence = Promise.resolve();
 let reconnectTimer = null;
@@ -94,16 +96,34 @@ function writeJson(file, value) {
 }
 
 function createKey(index) {
-  const colors = ['#8b5cf6', '#6d28d9', '#4c1d95', '#7c3aed'];
-  return { index, name: `Tecla ${index + 1}`, color: colors[index % colors.length], text: String(index + 1), animated: false, actions: [{ kind: 'none' }] };
+  return { index, name: `Tecla ${index + 1}`, color: '#000000', text: '', animated: false, actions: [{ kind: 'none' }] };
 }
+
+const defaultExamples = [
+  ['OBS · Grabar', '#dc2626', { kind: 'obs', value: 'recordToggle', settings: { longPress: false } }],
+  ['OBS · Directo', '#7c3aed', { kind: 'obs', value: 'streamToggle', settings: { longPress: false } }],
+  ['OBS · Cámara virtual', '#2563eb', { kind: 'obs', value: 'virtualCameraToggle' }],
+  ['OBS · Replay', '#059669', { kind: 'obs', value: 'replayBufferToggle' }],
+  ['OBS · Guardar replay', '#0d9488', { kind: 'obs', value: 'replayBufferSave' }],
+  ['OBS · Studio Mode', '#4f46e5', { kind: 'obs', value: 'studioModeToggle' }],
+  ['OBS · Escena', '#334155', { kind: 'obs', value: 'scene', settings: {} }],
+  ['OBS · Silenciar fuente', '#475569', { kind: 'obs', value: 'inputMuteToggle', settings: {} }],
+  ['OBS · Mostrar fuente', '#374151', { kind: 'obs', value: 'sourceVisibilityToggle', settings: {} }],
+  ['OBS · Captura', '#1f2937', { kind: 'obs', value: 'screenshot', settings: { imageFormat: 'png' } }],
+  ['Twitch · Canal', '#9146ff', { kind: 'native', value: 'twitch.channel', settings: {} }],
+  ['Twitch · Chat', '#772ce8', { kind: 'native', value: 'twitch.chat', settings: {} }],
+];
 
 function createProfile(name = 'Perfil principal') {
   return {
     id: crypto.randomUUID(),
     name,
     description: 'Perfil local de NEXORA',
-    keys: Array.from({ length: 12 }, (_, index) => createKey(index)),
+    keys: Array.from({ length: 12 }, (_, index) => {
+      const key = createKey(index);
+      const [name, color, action] = defaultExamples[index];
+      return { ...key, name, color, actions: [structuredClone(action)] };
+    }),
     folders: [],
     updatedAt: new Date().toISOString(),
   };
@@ -334,7 +354,17 @@ function handleWorkerMessage(message) {
     if (event.pressed && screensaverActive) void wakeScreensaver();
     else {
       scheduleScreensaver();
-      if (event.pressed) void runKeyAction(event.key);
+      const timer = longPressTimers.get(event.key);
+      if (!event.pressed && timer) {
+        clearTimeout(timer);
+        longPressTimers.delete(event.key);
+      } else if (event.pressed) {
+        const action = activeKeys?.[event.key - 1]?.actions?.[0];
+        if (action?.kind === 'obs' && action.settings?.longPress === true) {
+          const nextTimer = setTimeout(() => { longPressTimers.delete(event.key); void runKeyAction(event.key); }, 5000);
+          longPressTimers.set(event.key, nextTimer);
+        } else void runKeyAction(event.key);
+      }
     }
   }
   sendEvent(message);
@@ -386,8 +416,10 @@ function cancelPendingKeySync(message = 'Sincronización sustituida por una pág
 async function writeHardwareKey(key) {
   if (!workerConnected) return { ok: true, deferred: true };
   const repository = loadRepository();
-  const file = key?.iconPath ? assetPath(key.iconPath, repository) : null;
-  const visual = { key: key.index + 1, file, text: String(key.text || ''), color: String(key.color || '#111018') };
+  const action = key?.actions?.[0];
+  const functional = Boolean(action && action.kind !== 'none');
+  const file = functional ? (key?.iconPath ? assetPath(key.iconPath, repository) : defaultActionIconPath(action, key?.color)) : null;
+  const visual = { key: key.index + 1, file, text: functional ? String(key.text || '') : '', color: functional ? String(key.color || '#111018') : '#000000' };
   return (file || visual.text)
     ? serialWorkerRequest(key.animated && file ? 'gifStart' : 'image', visual)
     : serialWorkerRequest('clear', { key: key.index + 1 });
@@ -482,12 +514,35 @@ function builtinBannerPath() {
   return target;
 }
 
+function defaultActionIconPath(action, color = '#111827') {
+  if (!action || action.kind === 'none' || action.kind === 'delay') return null;
+  const labels = {
+    recordToggle: 'REC', recordStart: 'REC', recordStop: 'STOP', streamToggle: 'LIVE', streamStart: 'LIVE', streamStop: 'OFF',
+    scene: 'SCN', previewScene: 'PREV', virtualCameraToggle: 'CAM', replayBufferToggle: 'RPL', replayBufferSave: 'SAVE',
+    studioModeToggle: 'STD', sourceVisibilityToggle: 'EYE', inputMuteToggle: 'MIC', screenshot: 'SHOT', transition: 'FX', filterToggle: 'FLT',
+  };
+  const fallback = { multiAction: 'MULTI', multiSwitch: 'SW', hotkey: 'KEY', media: 'MEDIA', profile: 'PROF', folder: 'DIR', openUrl: 'WEB', launchPath: 'APP', plugin: 'PLUG', native: 'APP', obs: 'OBS' };
+  const label = String(labels[action.value] || fallback[action.kind] || 'NX').slice(0, 5);
+  const safeColor = /^#[0-9a-f]{6}$/i.test(color) ? color : '#111827';
+  const signature = crypto.createHash('sha256').update(`${action.kind}:${action.value || ''}:${safeColor}:${label}`).digest('hex').slice(0, 20);
+  const directory = path.join(dataRoot, 'assets', 'action-icons');
+  const target = path.join(directory, `${signature}.svg`);
+  if (!fs.existsSync(target)) {
+    fs.mkdirSync(directory, { recursive: true });
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="102" height="102" viewBox="0 0 102 102"><defs><radialGradient id="g"><stop offset="0" stop-color="${safeColor}"/><stop offset="1" stop-color="#050506"/></radialGradient></defs><rect width="102" height="102" rx="16" fill="url(#g)"/><rect x="19" y="19" width="64" height="64" rx="14" fill="none" stroke="#fff" stroke-width="4" opacity=".9"/><text x="51" y="58" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="${label.length > 4 ? 16 : 20}" font-weight="700">${label}</text></svg>`;
+    fs.writeFileSync(target, svg, 'utf8');
+  }
+  return target;
+}
+
 function mapHardwareKeys(keys, repository = loadRepository()) {
   return Array.from({ length: 12 }, (_, index) => {
     const key = keys[index] || {};
+    const action = key.actions?.[0];
+    const functional = Boolean(action && action.kind !== 'none');
     return {
-      file: key.iconPath ? assetPath(key.iconPath, repository) : null,
-      animated: Boolean(key.animated), text: String(key.text || ''), color: String(key.color || '#111018'),
+      file: functional ? (key.iconPath ? assetPath(key.iconPath, repository) : defaultActionIconPath(action, key.color)) : null,
+      animated: functional && Boolean(key.animated), text: functional ? String(key.text || '') : '', color: functional ? String(key.color || '#111018') : '#000000',
     };
   });
 }
@@ -524,7 +579,26 @@ function sendNativeHotkey(value) {
   child.unref();
 }
 
-async function executeNativeAction(value) {
+function sendConfiguredHotkey(action) {
+  if (process.platform !== 'win32') throw new Error('Los atajos configurables requieren Windows.');
+  const rawKey = String(action.value || '').trim().toUpperCase();
+  const aliases = { ENTER: 0x0D, RETURN: 0x0D, ESC: 0x1B, ESCAPE: 0x1B, SPACE: 0x20, TAB: 0x09, BACKSPACE: 0x08, DELETE: 0x2E, UP: 0x26, DOWN: 0x28, LEFT: 0x25, RIGHT: 0x27, HOME: 0x24, END: 0x23 };
+  let keyCode = aliases[rawKey];
+  if (!keyCode && /^[A-Z0-9]$/.test(rawKey)) keyCode = rawKey.charCodeAt(0);
+  const functionMatch = /^F([1-9]|1[0-2])$/.exec(rawKey);
+  if (!keyCode && functionMatch) keyCode = 0x6F + Number(functionMatch[1]);
+  if (!keyCode) throw new Error('Tecla no permitida. Usa A-Z, 0-9, F1-F12, Enter, Escape, flechas, Tab, Space o Delete.');
+  const modifierCodes = { control: 0x11, shift: 0x10, alt: 0x12, meta: 0x5B };
+  const modifiers = Array.isArray(action.settings?.modifiers) ? action.settings.modifiers : Array.isArray(action.modifiers) ? action.modifiers : [];
+  const keys = [...new Set(modifiers.map((value) => modifierCodes[String(value).toLowerCase()]).filter(Boolean)), keyCode];
+  const down = keys.map((key) => `[NXHotkey]::keybd_event(${key},0,0,[UIntPtr]::Zero)`).join(';');
+  const up = [...keys].reverse().map((key) => `[NXHotkey]::keybd_event(${key},0,2,[UIntPtr]::Zero)`).join(';');
+  const script = `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class NXHotkey { [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra); }';${down};Start-Sleep -Milliseconds 45;${up}`;
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true, stdio: 'ignore' });
+  child.unref();
+}
+
+async function executeNativeAction(value, settings = {}) {
   if (value === 'discord.mute' || value === 'discord.deafen') return sendNativeHotkey(value);
   const externalTargets = {
     'discord.open': 'discord://-/channels/@me',
@@ -535,6 +609,34 @@ async function executeNativeAction(value) {
     'camo.support': 'https://reincubate.com/support/camo/',
   };
   if (externalTargets[value]) { await shell.openExternal(externalTargets[value]); return; }
+  if (value === 'spotify.uri') {
+    const uri = String(settings.uri || '').trim();
+    if (!/^spotify:[a-z][a-z0-9-]*:[a-zA-Z0-9:_-]+$/i.test(uri) || uri.length > 500) throw new Error('La URI de Spotify no es válida.');
+    await shell.openExternal(uri);
+    return;
+  }
+  if (value === 'discord.channel') {
+    const target = new URL(String(settings.url || '').trim());
+    if (target.protocol !== 'https:' || !['discord.com', 'canary.discord.com', 'ptb.discord.com'].includes(target.hostname) || !target.pathname.startsWith('/channels/')) throw new Error('El enlace debe ser un canal válido de discord.com.');
+    await shell.openExternal(target.href);
+    return;
+  }
+  if (value === 'twitch.channel' || value === 'twitch.chat') {
+    const channel = String(settings.channel || '').trim();
+    if (!/^[a-zA-Z0-9_]{1,25}$/.test(channel)) throw new Error('El nombre del canal de Twitch no es válido.');
+    const target = value === 'twitch.chat'
+      ? `https://www.twitch.tv/popout/${channel}/chat?popout=`
+      : `https://www.twitch.tv/${channel}`;
+    await shell.openExternal(target);
+    return;
+  }
+  if (value === 'camo.custom') {
+    const executable = String(settings.executablePath || '').trim();
+    if (!path.isAbsolute(executable) || path.extname(executable).toLowerCase() !== '.exe' || !fs.existsSync(executable)) throw new Error('Selecciona un ejecutable válido de Camo Studio.');
+    const error = await shell.openPath(executable);
+    if (error) throw new Error(error);
+    return;
+  }
   if (value === 'camo.open') {
     const candidates = [
       path.join(windowsLocalData, 'Programs', 'Camo Studio', 'Camo Studio.exe'),
@@ -555,10 +657,35 @@ async function executeNativeAction(value) {
   throw new Error('Acción nativa desconocida o no autorizada.');
 }
 
-async function executeKeyAction(key, keyIndex) {
-  const action = key?.actions?.[0];
+async function executeAction(action, keyIndex, depth = 0) {
   if (!action || action.kind === 'none') return;
-  if (action.kind === 'openUrl') {
+  if (depth > 3) throw new Error('La secuencia supera la profundidad permitida.');
+  if (action.kind === 'delay') {
+    const delayMs = Math.max(0, Math.min(60_000, Number(action.settings?.delayMs || 0)));
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return;
+  }
+  if (action.kind === 'multiAction' || action.kind === 'multiSwitch') {
+    let steps = Array.isArray(action.steps) ? action.steps : [];
+    let switchKey = null;
+    let currentState = 0;
+    if (action.kind === 'multiSwitch') {
+      switchKey = String(action.contextId || `key-${keyIndex}`);
+      currentState = Number(multiSwitchStates.get(switchKey) || 0) % 2;
+      steps = Array.isArray(action.states?.[currentState]) ? action.states[currentState] : [];
+    }
+    if (steps.length > 100) throw new Error('Una Multi Action admite como máximo 100 pasos.');
+    for (const step of steps) await executeAction(step?.action, keyIndex, depth + 1);
+    if (switchKey) {
+      const nextState = currentState === 0 ? 1 : 0;
+      multiSwitchStates.set(switchKey, nextState);
+      sendEvent({ type: 'plugin-feedback', event: 'setState', keyIndex, payload: { state: nextState } });
+    }
+    return;
+  }
+  if (action.kind === 'hotkey') {
+    sendConfiguredHotkey(action);
+  } else if (action.kind === 'openUrl') {
     const rawUrl = String(action.value || '').trim();
     if (!rawUrl) throw new Error('La dirección web es obligatoria.');
     const target = new URL(/^[a-z][a-z\d+.-]*:/i.test(rawUrl) ? rawUrl : `https://${rawUrl}`);
@@ -571,7 +698,7 @@ async function executeKeyAction(key, keyIndex) {
   } else if (action.kind === 'media') {
     sendMediaKey(action.value);
   } else if (action.kind === 'native') {
-    await executeNativeAction(action.value);
+    await executeNativeAction(action.value, action.settings || {});
   } else if (action.kind === 'plugin') {
     await pluginService.execute(action.pluginId, action.actionId, action.settings || {}, action.contextId, keyIndex);
   } else if (action.kind === 'obs') {
@@ -596,6 +723,10 @@ async function executeKeyAction(key, keyIndex) {
   } else {
     throw new Error(`La acción ${action.kind} todavía no tiene ejecutor seguro.`);
   }
+}
+
+async function executeKeyAction(key, keyIndex) {
+  return executeAction(key?.actions?.[0], keyIndex, 0);
 }
 
 async function runKeyAction(keyNumber) {
@@ -861,6 +992,7 @@ async function invoke(command, args) {
   if (command === 'test_obs_connection' || command === 'obs_connect') return obsService.connect(args.url, args.password || '');
   if (command === 'obs_action') { await obsService.action(args.action, args.settings || {}); return 'Acción enviada a OBS.'; }
   if (command === 'obs_get_scenes') return obsService.getScenes();
+  if (command === 'obs_get_catalog') return obsService.getCatalog();
   if (command === 'apply_key_config') return null;
   throw new Error(`Comando no implementado en Electron: ${command}`);
 }
@@ -962,5 +1094,5 @@ app.whenReady().then(() => {
 app.on('second-instance', () => {
   if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
 });
-app.on('before-quit', () => { shuttingDown = true; if (reconnectTimer) clearTimeout(reconnectTimer); for (const inspector of propertyInspectorWindows.values()) inspector.destroy(); propertyInspectorWindows.clear(); pluginService?.stopAll(); obsService?.disconnect(); if (worker?.pid) { void workerRequest('shutdown', {}, 1000); setTimeout(() => worker?.kill(), 1100).unref(); } });
+app.on('before-quit', () => { shuttingDown = true; if (reconnectTimer) clearTimeout(reconnectTimer); for (const timer of longPressTimers.values()) clearTimeout(timer); longPressTimers.clear(); multiSwitchStates.clear(); for (const inspector of propertyInspectorWindows.values()) inspector.destroy(); propertyInspectorWindows.clear(); pluginService?.stopAll(); obsService?.disconnect(); if (worker?.pid) { void workerRequest('shutdown', {}, 1000); setTimeout(() => worker?.kill(), 1100).unref(); } });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
