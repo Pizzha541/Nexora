@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createPluginService } = require('./plugin-service.cjs');
 const { ObsService } = require('./obs-service.cjs');
+const { VoxoraService } = require('./voxora-service.cjs');
 const { createUpdateService } = require('./update-service.cjs');
 
 let window = null;
@@ -17,6 +18,7 @@ let activeKeys = null;
 let rendererReady = false;
 let pluginService = null;
 let obsService = null;
+let voxoraService = null;
 let updateService = null;
 const propertyInspectorWindows = new Map();
 const pending = new Map();
@@ -657,6 +659,7 @@ function sendConfiguredHotkey(action) {
 }
 
 async function executeNativeAction(value, settings = {}) {
+  if (value.startsWith('voxora.')) return voxoraService.action(value, settings);
   if (value === 'discord.mute' || value === 'discord.deafen') return sendNativeHotkey(value);
   const externalTargets = {
     'discord.open': 'discord://-/channels/@me',
@@ -799,6 +802,7 @@ async function invoke(command, args) {
   const repository = loadRepository();
   if (command === 'get_bootstrap_state') {
     const mode = repository.settings.deviceMode || 'simulation';
+    const voxora = await voxoraService.summary();
     return {
       version: app.getVersion(), activeProfileId: repository.settings.activeProfileId,
       profiles: repository.profiles, macros: repository.macros, assets: repository.assets,
@@ -809,7 +813,7 @@ async function invoke(command, args) {
         : { connected: workerConnected, mode, name: 'Mountain DisplayPad', vendorId: 0x3282, productId: 0x0009, lastError: workerConnected ? undefined : 'Pulsa «Volver a detectar».' },
       integrations: [
         { id: 'obs', name: 'OBS Studio', status: obsService?.connected ? 'connected' : 'unconfigured', detail: obsService?.connected ? 'WebSocket 5.x conectado' : 'WebSocket 5.x · puerto 4455', priority: 1 },
-        { id: 'voxora', name: 'VOXORA TTS', status: 'unconfigured', detail: 'Esperando interfaz de comunicación', priority: 2 },
+        { id: 'voxora', name: 'VOXORA TTS', status: voxora.status, detail: voxora.detail, priority: 2 },
         { id: 'discord', name: 'Discord', status: 'unconfigured', detail: 'Módulo oficial/autorizado por definir', priority: 3 },
         { id: 'twitch', name: 'Twitch', status: 'unconfigured', detail: 'Módulo preparado', priority: 4 },
       ],
@@ -888,6 +892,8 @@ async function invoke(command, args) {
   if (command === 'update_get_status') return updateService.getStatus();
   if (command === 'update_check') return updateService.check();
   if (command === 'update_install') return updateService.install();
+  if (command === 'voxora_get_catalog') return voxoraService.catalog();
+  if (command === 'voxora_action') return voxoraService.action(String(args.action || ''), args.settings || {});
   if (command === 'execute_key_action') { await executeKeyAction(structuredClone(args.key), Number(args.keyIndex || 0)); return 'Acción ejecutada.'; }
   if (command === 'import_visual_asset') {
     const extensions = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' };
@@ -1093,6 +1099,8 @@ app.whenReady().then(() => {
     openExternal: (url) => shell.openExternal(url),
   });
   obsService = new ObsService({ onEvent: sendEvent, log: appendLog });
+  voxoraService = new VoxoraService({ localAppData: windowsLocalData, onEvent: sendEvent, log: appendLog });
+  voxoraService.start();
   updateService = createUpdateService({ sendEvent, log: appendLog });
   if (smokeTest) {
     appendLog('smoke-test', `Arranque empaquetado correcto en ${dataRoot}`);
@@ -1153,5 +1161,5 @@ app.whenReady().then(() => {
 app.on('second-instance', () => {
   if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
 });
-app.on('before-quit', () => { shuttingDown = true; if (reconnectTimer) clearTimeout(reconnectTimer); for (const timer of longPressTimers.values()) clearTimeout(timer); longPressTimers.clear(); multiSwitchStates.clear(); for (const inspector of propertyInspectorWindows.values()) inspector.destroy(); propertyInspectorWindows.clear(); pluginService?.stopAll(); obsService?.disconnect(); if (worker?.pid) { void workerRequest('shutdown', {}, 1000); setTimeout(() => worker?.kill(), 1100).unref(); } });
+app.on('before-quit', () => { shuttingDown = true; if (reconnectTimer) clearTimeout(reconnectTimer); for (const timer of longPressTimers.values()) clearTimeout(timer); longPressTimers.clear(); multiSwitchStates.clear(); for (const inspector of propertyInspectorWindows.values()) inspector.destroy(); propertyInspectorWindows.clear(); pluginService?.stopAll(); obsService?.disconnect(); voxoraService?.stop(); if (worker?.pid) { void workerRequest('shutdown', {}, 1000); setTimeout(() => worker?.kill(), 1100).unref(); } });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

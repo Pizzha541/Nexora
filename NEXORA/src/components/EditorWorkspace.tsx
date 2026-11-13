@@ -18,7 +18,7 @@ import {
   Trash2,
   Volume2,
 } from "lucide-react";
-import type { ActionKind, FolderNode, InstalledPlugin, KeyAction, KeyConfig, ObsCatalog, Profile, SequenceStep, VisualAsset } from "../types";
+import type { ActionKind, FolderNode, InstalledPlugin, KeyAction, KeyConfig, ObsCatalog, Profile, SequenceStep, VisualAsset, VoxoraCatalog } from "../types";
 import { NEXORA_NATIVE_ACTION_MIME, NEXORA_PLUGIN_ACTION_MIME } from "../lib/realtime";
 import { findNativeAction, NATIVE_PLUGINS, type NativeSettingField } from "../lib/nativePlugins";
 
@@ -252,7 +252,7 @@ const actionLabel = (key: KeyConfig, profiles: Profile[], folders: FolderNode[],
   return labels[action.kind] ?? action.kind;
 };
 
-export function KeyInspector({ keyConfig, assetPreview, assets, profiles, folders, plugins, obsCatalog, obsConnected, onChange, onImport, onPickFile, onOpenPluginInspector, onTest }: {
+export function KeyInspector({ keyConfig, assetPreview, assets, profiles, folders, plugins, obsCatalog, obsConnected, voxoraCatalog, voxoraConnected, onChange, onImport, onPickFile, onOpenPluginInspector, onTest }: {
   keyConfig: KeyConfig;
   assetPreview?: ReactNode;
   assets: VisualAsset[];
@@ -261,6 +261,8 @@ export function KeyInspector({ keyConfig, assetPreview, assets, profiles, folder
   plugins: InstalledPlugin[];
   obsCatalog: ObsCatalog;
   obsConnected: boolean;
+  voxoraCatalog: VoxoraCatalog;
+  voxoraConnected: boolean;
   onChange: (key: KeyConfig) => void;
   onImport: (files: FileList) => Promise<VisualAsset[]>;
   onPickFile: () => Promise<string | undefined>;
@@ -290,6 +292,7 @@ export function KeyInspector({ keyConfig, assetPreview, assets, profiles, folder
     if (source === "obsHotkeys") return obsCatalog.hotkeys.map((value) => ({ value, label: value }));
     if (source === "obsSceneItems") return obsCatalog.sceneItems.map((item) => ({ value: JSON.stringify([item.sceneName, item.sceneItemId]), label: `${item.sceneName} · ${item.sourceName}` }));
     if (source === "obsFilters") return obsCatalog.filters.map((item) => ({ value: JSON.stringify([item.sourceName, item.filterName]), label: `${item.sourceName} · ${item.filterName}` }));
+    if (source === "voxoraVoices") return voxoraCatalog.voices.map((voice) => ({ value: voice.id, label: `${voice.name} · ${voice.language} · ${voice.engine}` }));
     return [];
   };
   const renderNativeField = (field: NativeSettingField, target: KeyAction = action, updateTarget: (next: KeyAction) => void = (next) => setAction(next), keyPrefix = "root") => {
@@ -299,7 +302,8 @@ export function KeyInspector({ keyConfig, assetPreview, assets, profiles, folder
     if (field.type === "boolean") return <label className="toggle-row inspector-native-field" key={`${keyPrefix}-${field.key}`}><span><strong>{field.label}</strong>{field.help && <small>{field.help}</small>}</span><input type="checkbox" checked={Boolean(current)} onChange={(event) => update(event.target.checked)} /></label>;
     if (field.type === "select") {
       const options = fieldOptions(field);
-      return <label className="inspector-native-field" key={`${keyPrefix}-${field.key}`}>{field.label}<select disabled={Boolean(field.source?.startsWith("obs") && !obsConnected)} value={String(current)} onChange={(event) => update(event.target.value)}><option value="">{field.source?.startsWith("obs") && !obsConnected ? "Conecta OBS primero" : `Selecciona ${field.label.toLowerCase()}`}</option>{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select>{field.help && <small>{field.help}</small>}</label>;
+      const sourceUnavailable = Boolean((field.source?.startsWith("obs") && !obsConnected) || (field.source === "voxoraVoices" && !voxoraConnected));
+      return <label className="inspector-native-field" key={`${keyPrefix}-${field.key}`}>{field.label}<select disabled={sourceUnavailable} value={String(current)} onChange={(event) => update(event.target.value)}><option value="">{sourceUnavailable ? (field.source === "voxoraVoices" ? "Abre VOXORA primero" : "Conecta OBS primero") : `Selecciona ${field.label.toLowerCase()}`}</option>{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select>{field.help && <small>{field.help}</small>}</label>;
     }
     if (field.type === "path") return <label className="inspector-native-field" key={`${keyPrefix}-${field.key}`}>{field.label}<div className="path-picker"><input value={String(current)} placeholder={field.placeholder} onChange={(event) => update(event.target.value)} /><button type="button" onClick={() => void onPickFile().then((value) => value && update(value))}>Examinar</button></div>{field.help && <small>{field.help}</small>}</label>;
     return <label className="inspector-native-field" key={`${keyPrefix}-${field.key}`}>{field.label}<input type={field.type === "number" ? "number" : "text"} value={String(current)} placeholder={field.placeholder} min={field.min} max={field.max} step={field.step} onChange={(event) => update(field.type === "number" ? Number(event.target.value) : event.target.value)} />{field.help && <small>{field.help}</small>}</label>;

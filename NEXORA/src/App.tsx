@@ -60,6 +60,8 @@ import {
   executeConfiguredKey,
   getObsScenes,
   getObsCatalog,
+  getVoxoraCatalog,
+  executeVoxoraAction,
   getUpdateStatus,
   checkForAppUpdate,
   installAppUpdate,
@@ -70,7 +72,7 @@ import {
   setPluginExecutionApproval,
   uninstallPlugin,
 } from "./lib/backend";
-import type { BootstrapState, ButtonEvent, DeviceMode, FolderNode, InstalledPlugin, KeyAction, KeyConfig, MacroDefinition, ObsCatalog, PluginActionDefinition, PluginCatalogEntry, Profile, UpdateStatus, VisualAsset, VisualSettings } from "./types";
+import type { BootstrapState, ButtonEvent, DeviceMode, FolderNode, InstalledPlugin, KeyAction, KeyConfig, MacroDefinition, ObsCatalog, PluginActionDefinition, PluginCatalogEntry, Profile, UpdateStatus, VisualAsset, VisualSettings, VoxoraCatalog } from "./types";
 import { shouldShowUpdatePrompt } from "./lib/updatePrompt";
 import { ActionLibrary, EditorWorkspace, KeyInspector, type NativeActionDrop, type PluginDrop } from "./components/EditorWorkspace";
 import { NATIVE_PLUGINS } from "./lib/nativePlugins";
@@ -92,6 +94,7 @@ import {
 
 type Section = "dashboard" | "displaypad" | "profiles" | "library" | "initial" | "macros" | "integrations" | "plugins" | "settings" | "about";
 const EMPTY_OBS_CATALOG: ObsCatalog = { currentScene: "", scenes: [], inputs: [], profiles: [], sceneCollections: [], transitions: [], hotkeys: [], sceneItems: [], filters: [] };
+const EMPTY_VOXORA_CATALOG: VoxoraCatalog = { protocolVersion: "", voxoraVersion: "", engine: { ready: false, state: "offline" }, capabilities: {}, voices: [], settings: {}, status: {} };
 const bundledAsset = (name: string) => `${import.meta.env.BASE_URL}assets/${name}`;
 const visualAssetCache = new Map<string, Promise<string>>();
 const cachedVisualAsset = (assetId: string) => {
@@ -598,11 +601,12 @@ function DisplayPadPanel({
   );
 }
 
-function IntegrationPanel({ state, selectedKey, onRefresh, onAssign }: { state: BootstrapState; selectedKey: number; onRefresh: () => void; onAssign: (key: number, value: NativeActionDrop) => void }) {
+function IntegrationPanel({ state, selectedKey, voxoraCatalog, onRefresh, onRefreshVoxora, onAssign }: { state: BootstrapState; selectedKey: number; voxoraCatalog: VoxoraCatalog; onRefresh: () => void; onRefreshVoxora: () => Promise<VoxoraCatalog | undefined>; onAssign: (key: number, value: NativeActionDrop) => void }) {
   const [url, setUrl] = useState("ws://127.0.0.1:4455");
   const [password, setPassword] = useState("");
   const [result, setResult] = useState("");
   const [testing, setTesting] = useState(false);
+  const [voxoraBusy, setVoxoraBusy] = useState(false);
 
   const test = async () => {
     setTesting(true);
@@ -612,10 +616,21 @@ function IntegrationPanel({ state, selectedKey, onRefresh, onAssign }: { state: 
     finally { setTesting(false); setPassword(""); }
   };
   const obsActions = NATIVE_PLUGINS.find((plugin) => plugin.id === "obs")?.actions ?? [];
+  const voxoraActions = NATIVE_PLUGINS.find((plugin) => plugin.id === "voxora")?.actions ?? [];
+  const voxoraConnected = state.integrations.find((item) => item.id === "voxora")?.status === "connected";
+  const detectVoxora = async () => {
+    setVoxoraBusy(true); setResult("");
+    try {
+      const catalog = await onRefreshVoxora();
+      setResult(catalog ? `VOXORA ${catalog.voxoraVersion} conectado · ${catalog.voices.length} voces · cola ${catalog.status.queueLength ?? 0}.` : "No se pudo detectar VOXORA.");
+      onRefresh();
+    } catch (error) { setResult(error instanceof Error ? error.message : String(error)); }
+    finally { setVoxoraBusy(false); }
+  };
 
   return (
     <div className="section-stack">
-      <div className="section-title"><span><em>01</em> Integraciones independientes</span><h1>Conecta tu flujo</h1><p>OBS es la primera integración operativa. Las credenciales se usan solo durante la prueba y no se persisten aquí.</p></div>
+      <div className="section-title"><span><em>01</em> Integraciones independientes</span><h1>Conecta tu flujo</h1><p>OBS y VOXORA funcionan mediante protocolos locales. NEXORA descubre VOXORA automáticamente y nunca muestra ni registra su token.</p></div>
       <div className="integration-layout">
         <div className="integration-list">
           {state.integrations.map((integration) => (
@@ -625,11 +640,16 @@ function IntegrationPanel({ state, selectedKey, onRefresh, onAssign }: { state: 
               <span className={`mini-state ${integration.status}`}>{integration.status}</span>
             </article>
           ))}
-          <section className="glass-card obs-action-library"><span className="eyebrow">ACCIONES OBS</span><h2>Control completo WebSocket 5.x</h2><p>Asigna una acción y completa sus propiedades desde el inspector de DisplayPad.</p>{obsActions.map((action) => {
+          <details className="glass-card obs-action-library integration-actions"><summary><div><span className="eyebrow">ACCIONES OBS</span><h2>Control completo WebSocket 5.x</h2></div><ChevronRight size={17} /></summary><p>Asigna una acción y completa sus propiedades desde el inspector de DisplayPad.</p>{obsActions.map((action) => {
             const payload: NativeActionDrop = { kind: "obs", value: action.value, name: action.name, settings: action.settings };
             const needsConfiguration = Boolean(action.fields?.some((field) => field.required && !action.settings?.[field.key]));
             return <div className="native-action-row" draggable key={action.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(NEXORA_NATIVE_ACTION_MIME, JSON.stringify(payload)); }}><span><strong>{action.name}</strong>{action.fields?.length ? <small>Configurable</small> : null}</span><button type="button" className="secondary-button" onClick={() => { onAssign(selectedKey, payload); setResult(`“${action.name}” asignada. Configúrala en DisplayPad.`); }}>Tecla {selectedKey + 1}</button><button type="button" className="secondary-button" disabled={state.integrations[0]?.status !== "connected" || needsConfiguration} onClick={() => { void executeObsAction(action.value, action.settings).then(setResult).catch((error) => setResult(error instanceof Error ? error.message : String(error))); }}><Play size={14} /> Probar</button></div>;
-          })}</section>
+          })}</details>
+          <details className="glass-card obs-action-library integration-actions" open={voxoraConnected}><summary><div><span className="eyebrow">ACCIONES VOXORA</span><h2>Cola TTS local real</h2></div><ChevronRight size={17} /></summary><p>{voxoraCatalog.voices.length ? `${voxoraCatalog.voices.length} voces disponibles · motor ${voxoraCatalog.engine.state}.` : "Abre VOXORA 0.12.0 y pulsa Detectar."}</p><button type="button" className="secondary-button" onClick={() => void detectVoxora()} disabled={voxoraBusy}>{voxoraBusy ? <LoaderCircle className="spin" size={15} /> : <PlugZap size={15} />} Detectar VOXORA</button>{voxoraActions.map((action) => {
+            const payload: NativeActionDrop = { kind: "native", value: action.value, name: action.name, settings: action.settings };
+            const needsConfiguration = Boolean(action.fields?.some((field) => field.required && !action.settings?.[field.key]));
+            return <div className="native-action-row" draggable key={action.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(NEXORA_NATIVE_ACTION_MIME, JSON.stringify(payload)); }}><span><strong>{action.name}</strong>{action.fields?.length ? <small>Configurable</small> : null}</span><button type="button" className="secondary-button" onClick={() => { onAssign(selectedKey, payload); setResult(`“${action.name}” asignada. Configúrala en DisplayPad.`); }}>Tecla {selectedKey + 1}</button><button type="button" className="secondary-button" disabled={!voxoraConnected || needsConfiguration} onClick={() => { void executeVoxoraAction(action.value, action.settings).then(setResult).catch((error) => setResult(error instanceof Error ? error.message : String(error))); }}><Play size={14} /> Probar</button></div>;
+          })}</details>
         </div>
         <div className="obs-config glass-card">
           <span className="eyebrow">OBS WEBSOCKET 5.X</span><h2>Probar conexión</h2>
@@ -834,6 +854,7 @@ function App() {
   const [pressedKeys, setPressedKeys] = useState<Set<number>>(new Set());
   const [obsScenes, setObsScenes] = useState<string[]>([]);
   const [obsCatalog, setObsCatalog] = useState<ObsCatalog>(EMPTY_OBS_CATALOG);
+  const [voxoraCatalog, setVoxoraCatalog] = useState<VoxoraCatalog>(EMPTY_VOXORA_CATALOG);
   const [updatePrompt, setUpdatePrompt] = useState<UpdateStatus | null>(null);
   const [dismissedUpdate, setDismissedUpdate] = useState<string | null>(null);
   const [updatePromptBusy, setUpdatePromptBusy] = useState(false);
@@ -854,7 +875,18 @@ function App() {
       return undefined;
     }
   }, []);
+  const loadVoxoraCatalog = useCallback(async () => {
+    try {
+      const catalog = await getVoxoraCatalog();
+      setVoxoraCatalog(catalog);
+      return catalog;
+    } catch {
+      setVoxoraCatalog(EMPTY_VOXORA_CATALOG);
+      return undefined;
+    }
+  }, []);
   useEffect(() => { void refresh(); }, []);
+  useEffect(() => { void loadVoxoraCatalog(); }, [loadVoxoraCatalog]);
   useEffect(() => { stateRef.current = state; }, [state]);
   useEffect(() => {
     if (state) window.nexoraDesktop?.ready();
@@ -1211,7 +1243,7 @@ function App() {
 
   if (!state || !activeProfile) return <div className="app-loading"><LoaderCircle className="spin" /> Cargando NEXORA…</div>;
 
-  const mainContent = section === "integrations" ? <IntegrationPanel state={state} selectedKey={selectedKey} onRefresh={refresh} onAssign={assignNativeAction} /> : section === "library" ? (
+  const mainContent = section === "integrations" ? <IntegrationPanel state={state} selectedKey={selectedKey} voxoraCatalog={voxoraCatalog} onRefresh={refresh} onRefreshVoxora={loadVoxoraCatalog} onAssign={assignNativeAction} /> : section === "library" ? (
     <LibraryPanel assets={state.assets} onImport={importAssets} onAssign={assignAssetToSelectedKey} onDelete={removeVisualAsset} onImportBaseCamp={importBaseCampPack} />
   ) : section === "initial" ? (
     <InitialScreenPanel assets={state.assets} settings={state.visualSettings} hardwareReady={state.device.mode === "hardware" && state.device.connected} onSave={saveInitialScreen} onApply={applyInitialScreen} />
@@ -1278,6 +1310,8 @@ function App() {
         plugins={state.plugins}
         obsCatalog={obsCatalog}
         obsConnected={state.integrations.some((integration) => integration.id === "obs" && integration.status === "connected")}
+        voxoraCatalog={voxoraCatalog}
+        voxoraConnected={state.integrations.some((integration) => integration.id === "voxora" && integration.status === "connected")}
         onChange={updateKey}
         onImport={importAssets}
         onPickFile={pickFile}

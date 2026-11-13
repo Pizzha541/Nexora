@@ -5,6 +5,8 @@ import { createProfile } from "../src/lib/defaults";
 import { NEXORA_NATIVE_ACTION_MIME } from "../src/lib/realtime";
 import type { InstalledPlugin } from "../src/types";
 
+const emptyVoxora = { protocolVersion: "", voxoraVersion: "", engine: { ready: false, state: "offline" }, capabilities: {}, voices: [], settings: {}, status: {} };
+
 const plugin: InstalledPlugin = {
   id: "technical-plugin-id",
   name: "Twitch Tools",
@@ -49,7 +51,7 @@ describe("editor DisplayPad", () => {
   it("muestra nombres comprensibles y oculta identificadores técnicos en el inspector", () => {
     const profile = createProfile("Principal");
     const key = { ...profile.keys[0], actions: [{ kind: "plugin" as const, pluginId: plugin.id, actionId: plugin.actions[0].id, settings: {} }] };
-    render(<KeyInspector keyConfig={key} assets={[]} profiles={[profile]} folders={[]} plugins={[plugin]} obsCatalog={{ currentScene: "", scenes: [], inputs: [], profiles: [], sceneCollections: [], transitions: [], hotkeys: [], sceneItems: [], filters: [] }} obsConnected={false} onChange={vi.fn()} onImport={vi.fn()} onPickFile={vi.fn()} onOpenPluginInspector={vi.fn()} onTest={vi.fn()} />);
+    render(<KeyInspector keyConfig={key} assets={[]} profiles={[profile]} folders={[]} plugins={[plugin]} obsCatalog={{ currentScene: "", scenes: [], inputs: [], profiles: [], sceneCollections: [], transitions: [], hotkeys: [], sceneItems: [], filters: [] }} obsConnected={false} voxoraCatalog={emptyVoxora} voxoraConnected={false} onChange={vi.fn()} onImport={vi.fn()} onPickFile={vi.fn()} onOpenPluginInspector={vi.fn()} onTest={vi.fn()} />);
 
     expect(screen.getByText("Twitch Tools · Crear marcador")).toBeInTheDocument();
     expect(screen.queryByText(plugin.id)).not.toBeInTheDocument();
@@ -60,7 +62,7 @@ describe("editor DisplayPad", () => {
     const profile = createProfile("Principal");
     const onChange = vi.fn();
     const key = { ...profile.keys[0], actions: [{ kind: "obs" as const, value: "scene", settings: {} }] };
-    render(<KeyInspector keyConfig={key} assets={[]} profiles={[profile]} folders={[]} plugins={[]} obsCatalog={{ currentScene: "Inicio", scenes: ["Inicio", "Juego"], inputs: [], profiles: [], sceneCollections: [], transitions: [], hotkeys: [], sceneItems: [], filters: [] }} obsConnected onChange={onChange} onImport={vi.fn()} onPickFile={vi.fn()} onOpenPluginInspector={vi.fn()} onTest={vi.fn()} />);
+    render(<KeyInspector keyConfig={key} assets={[]} profiles={[profile]} folders={[]} plugins={[]} obsCatalog={{ currentScene: "Inicio", scenes: ["Inicio", "Juego"], inputs: [], profiles: [], sceneCollections: [], transitions: [], hotkeys: [], sceneItems: [], filters: [] }} obsConnected voxoraCatalog={emptyVoxora} voxoraConnected={false} onChange={onChange} onImport={vi.fn()} onPickFile={vi.fn()} onOpenPluginInspector={vi.fn()} onTest={vi.fn()} />);
 
     fireEvent.change(screen.getByLabelText("Escena"), { target: { value: "Juego" } });
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ actions: [expect.objectContaining({ settings: { sceneName: "Juego" } })] }));
@@ -70,10 +72,21 @@ describe("editor DisplayPad", () => {
     const profile = createProfile("Principal");
     const onChange = vi.fn();
     const key = { ...profile.keys[0], actions: [{ kind: "multiAction" as const, value: "multiAction", contextId: "multi-1", steps: [] }] };
-    render(<KeyInspector keyConfig={key} assets={[]} profiles={[profile]} folders={[]} plugins={[]} obsCatalog={{ currentScene: "", scenes: [], inputs: [], profiles: [], sceneCollections: [], transitions: [], hotkeys: [], sceneItems: [], filters: [] }} obsConnected={false} onChange={onChange} onImport={vi.fn()} onPickFile={vi.fn()} onOpenPluginInspector={vi.fn()} onTest={vi.fn()} />);
+    render(<KeyInspector keyConfig={key} assets={[]} profiles={[profile]} folders={[]} plugins={[]} obsCatalog={{ currentScene: "", scenes: [], inputs: [], profiles: [], sceneCollections: [], transitions: [], hotkeys: [], sceneItems: [], filters: [] }} obsConnected={false} voxoraCatalog={emptyVoxora} voxoraConnected={false} onChange={onChange} onImport={vi.fn()} onPickFile={vi.fn()} onOpenPluginInspector={vi.fn()} onTest={vi.fn()} />);
 
     expect(screen.getByRole("dialog", { name: "Editor de acciones múltiples" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Añadir acción/ }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ actions: [expect.objectContaining({ steps: [expect.objectContaining({ action: expect.objectContaining({ kind: "obs", value: "recordToggle" }) })] })] }));
+  });
+
+  it("configura una voz real de VOXORA desde su catálogo", () => {
+    const profile = createProfile("Principal");
+    const onChange = vi.fn();
+    const key = { ...profile.keys[0], actions: [{ kind: "native" as const, value: "voxora.settings", settings: { voiceId: "", rate: 1, pitch: 1, volume: 1 } }] };
+    const catalog = { ...emptyVoxora, voices: [{ id: "gemini:Kore", name: "Kore · Gemini", language: "multilingual", engine: "gemini" }] };
+    render(<KeyInspector keyConfig={key} assets={[]} profiles={[profile]} folders={[]} plugins={[]} obsCatalog={{ currentScene: "", scenes: [], inputs: [], profiles: [], sceneCollections: [], transitions: [], hotkeys: [], sceneItems: [], filters: [] }} obsConnected={false} voxoraCatalog={catalog} voxoraConnected onChange={onChange} onImport={vi.fn()} onPickFile={vi.fn()} onOpenPluginInspector={vi.fn()} onTest={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Voz"), { target: { value: "gemini:Kore" } });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ actions: [expect.objectContaining({ settings: expect.objectContaining({ voiceId: "gemini:Kore" }) })] }));
   });
 });

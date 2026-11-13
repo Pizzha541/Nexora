@@ -155,6 +155,23 @@ export type ObsCatalog = {
   filters: Array<{ sourceName: string; filterName: string }>;
 };
 
+export type VoxoraVoice = {
+  id: string;
+  name: string;
+  language: string;
+  engine: "microsoft" | "gemini" | string;
+};
+
+export type VoxoraCatalog = {
+  protocolVersion: string;
+  voxoraVersion: string;
+  engine: { ready: boolean; state: string; error?: string | null };
+  capabilities: Record<string, unknown>;
+  voices: VoxoraVoice[];
+  settings: { voiceId?: string; voiceName?: string; rate?: number; pitch?: number; volume?: number; outputDevice?: null };
+  status: { state?: string; queueLength?: number; current?: Record<string, unknown> | null };
+};
+
 export type VisualAsset = {
   id: string;
   name: string;

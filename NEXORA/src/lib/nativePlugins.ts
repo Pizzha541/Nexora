@@ -1,6 +1,6 @@
 import type { ActionKind } from "../types";
 
-export type NativeSettingSource = "obsScenes" | "obsInputs" | "obsProfiles" | "obsSceneCollections" | "obsTransitions" | "obsHotkeys" | "obsSceneItems" | "obsFilters";
+export type NativeSettingSource = "obsScenes" | "obsInputs" | "obsProfiles" | "obsSceneCollections" | "obsTransitions" | "obsHotkeys" | "obsSceneItems" | "obsFilters" | "voxoraVoices";
 
 export type NativeSettingField = {
   key: string;
@@ -75,6 +75,36 @@ export const NATIVE_PLUGINS: NativePluginDefinition[] = [
       { id: "scene-transition", name: "Transición por escena", description: "Asigna una transición específica a una escena", kind: "obs", value: "sceneTransitionOverride", settings: { transitionDuration: 300 }, fields: [{ key: "sceneName", label: "Escena", type: "select", source: "obsScenes", required: true }, { key: "transitionName", label: "Transición", type: "select", source: "obsTransitions", required: true }, { key: "transitionDuration", label: "Duración (ms)", type: "number", min: 50, max: 20000, step: 50 }] },
       { id: "screenshot", name: "Guardar captura", description: "Guarda una captura de una fuente o escena", kind: "obs", value: "screenshot", settings: { imageFormat: "png", imageFilePath: "" }, fields: [{ key: "sourceName", label: "Fuente o escena", type: "select", source: "obsInputs", required: true }, { key: "imageFilePath", label: "Archivo de destino", type: "path", placeholder: "C:\\Capturas\\obs.png", required: true }, { key: "imageFormat", label: "Formato", type: "select", options: [{ value: "png", label: "PNG" }, { value: "jpg", label: "JPG" }] }] },
       { id: "hotkey", name: "Atajo interno de OBS", description: "Ejecuta un hotkey registrado en OBS", kind: "obs", value: "hotkey", fields: [{ key: "hotkeyName", label: "Atajo", type: "select", source: "obsHotkeys", required: true }] },
+    ],
+  },
+  {
+    id: "voxora",
+    name: "VOXORA TTS",
+    developer: "NEXORA + VOXORA",
+    description: "Usa la cola TTS real de VOXORA 0.12.0 mediante su protocolo local autenticado. VOXORA debe estar abierto.",
+    status: "connection-required",
+    actions: [
+      { id: "speak", name: "Decir texto", description: "Añade una frase a la cola real de Microsoft o Gemini", kind: "native", value: "voxora.speak", settings: { text: "", voiceId: "", rate: 1, pitch: 1, volume: 1, priority: 0, queueBehavior: "append" }, fields: [
+        { key: "text", label: "Texto", type: "text", placeholder: "Bienvenidos al directo", required: true, help: "Máximo 500 caracteres." },
+        { key: "voiceId", label: "Voz", type: "select", source: "voxoraVoices", help: "Vacío usa la voz activa de VOXORA." },
+        { key: "queueBehavior", label: "Cola", type: "select", options: [{ value: "append", label: "Añadir" }, { value: "replace", label: "Reemplazar toda la cola" }, { value: "interrupt", label: "Interrumpir y decir ahora" }] },
+        { key: "priority", label: "Prioridad", type: "number", min: -100, max: 100, step: 1 },
+        { key: "rate", label: "Velocidad", type: "number", min: 0.5, max: 2, step: 0.05 },
+        { key: "pitch", label: "Tono", type: "number", min: 0, max: 2, step: 0.05, help: "Gemini no ofrece control independiente de tono." },
+        { key: "volume", label: "Volumen", type: "number", min: 0, max: 1, step: 0.05 },
+      ] },
+      { id: "clipboard", name: "Hablar portapapeles", description: "Lee el portapapeles desde VOXORA sin copiar su contenido a NEXORA", kind: "native", value: "voxora.speakClipboard", settings: { queueBehavior: "append" }, fields: [{ key: "queueBehavior", label: "Cola", type: "select", options: [{ value: "append", label: "Añadir" }, { value: "replace", label: "Reemplazar" }, { value: "interrupt", label: "Interrumpir" }] }] },
+      { id: "pause", name: "Pausar", description: "Pausa reproducción y cola", kind: "native", value: "voxora.pause" },
+      { id: "resume", name: "Continuar", description: "Continúa reproducción y cola", kind: "native", value: "voxora.resume" },
+      { id: "stop", name: "Detener", description: "Detiene la frase actual y deja la cola pausada", kind: "native", value: "voxora.stop" },
+      { id: "skip", name: "Saltar", description: "Salta la frase actual y continúa con la siguiente", kind: "native", value: "voxora.skip" },
+      { id: "clear", name: "Vaciar cola", description: "Cancela la frase actual y elimina las pendientes", kind: "native", value: "voxora.clearQueue" },
+      { id: "settings", name: "Preset de voz", description: "Cambia voz, velocidad, tono y volumen; úsalo en Multi Action Switch", kind: "native", value: "voxora.settings", settings: { voiceId: "", rate: 1, pitch: 1, volume: 1 }, fields: [
+        { key: "voiceId", label: "Voz", type: "select", source: "voxoraVoices" },
+        { key: "rate", label: "Velocidad", type: "number", min: 0.5, max: 2, step: 0.05 },
+        { key: "pitch", label: "Tono", type: "number", min: 0, max: 2, step: 0.05 },
+        { key: "volume", label: "Volumen", type: "number", min: 0, max: 1, step: 0.05 },
+      ] },
     ],
   },
   {
