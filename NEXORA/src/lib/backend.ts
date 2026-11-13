@@ -1,5 +1,5 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { createProfile, localBootstrap } from "./defaults";
+import { createProfile, localBootstrap, NEXORA_PRESET_FILES } from "./defaults";
 import type { BootstrapState, ButtonEvent, DeviceMode, InstalledPlugin, KeyConfig, MacroDefinition, ObsCatalog, Profile, UpdateStatus, VisualAsset, VisualSettings } from "../types";
 
 const clone = <T,>(value: T): T => structuredClone(value);
@@ -146,12 +146,15 @@ export async function importVisualAsset(file: File): Promise<VisualAsset> {
 }
 
 export async function readVisualAsset(assetId: string): Promise<string> {
+  const preset = NEXORA_PRESET_FILES.find(([id]) => id === assetId);
+  if (preset && !window.nexoraDesktop) return `${import.meta.env.BASE_URL}assets/presets/${preset[1]}`;
   const local = localStorage.getItem(`nexora.asset.${assetId}`);
   if (local) return local;
   return invoke<string>("read_visual_asset", { assetId });
 }
 
 export async function deleteVisualAsset(assetId: string): Promise<void> {
+  if (NEXORA_PRESET_FILES.some(([id]) => id === assetId)) throw new Error("Las imágenes incluidas con NEXORA no se eliminan; puedes dejar de usarlas en cualquier tecla.");
   localStorage.removeItem(`nexora.asset.${assetId}`);
   await invoke("delete_visual_asset", { assetId });
 }

@@ -70,6 +70,7 @@ import {
   uninstallPlugin,
 } from "./lib/backend";
 import type { BootstrapState, ButtonEvent, DeviceMode, FolderNode, InstalledPlugin, KeyAction, KeyConfig, MacroDefinition, ObsCatalog, PluginActionDefinition, PluginCatalogEntry, Profile, UpdateStatus, VisualAsset, VisualSettings } from "./types";
+import { shouldShowUpdatePrompt } from "./lib/updatePrompt";
 import { ActionLibrary, EditorWorkspace, KeyInspector, type NativeActionDrop, type PluginDrop } from "./components/EditorWorkspace";
 import { NATIVE_PLUGINS } from "./lib/nativePlugins";
 import {
@@ -374,7 +375,10 @@ function LibraryPanel({ assets, onImport, onAssign, onDelete, onImportBaseCamp }
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(80);
-  const filtered = assets.filter((asset) => asset.name.toLowerCase().includes(query.toLowerCase()));
+  const filtered = assets
+    .filter((asset) => asset.name.toLowerCase().includes(query.toLowerCase()))
+    .sort((left, right) => Number(right.source === "nexora") - Number(left.source === "nexora") || left.name.localeCompare(right.name, "es"));
+  const includedCount = assets.filter((asset) => asset.source === "nexora").length;
   return (
     <div className="section-stack">
       <div className="section-title"><span><em>04</em> Biblioteca</span><h1>Recursos visuales reutilizables</h1><p>Importa PNG, JPG, WEBP o GIF una sola vez y reutilízalo en cualquier tecla, carpeta o pantalla inicial.</p></div>
@@ -387,7 +391,7 @@ function LibraryPanel({ assets, onImport, onAssign, onDelete, onImportBaseCamp }
           }} />
         </label>
         <button type="button" className="secondary-button" onClick={() => { setMessage("Buscando recursos de Base Camp…"); void onImportBaseCamp().then((result) => setMessage(`${result.imported} nuevos; ${result.total} recursos de Base Camp disponibles.`)).catch((error) => setMessage(error instanceof Error ? error.message : String(error))); }}><Download size={16} /> Importar pack de Base Camp</button>
-        <p>NEXORA detecta una instalación legítima o te deja elegir su carpeta. Copia los recursos a la biblioteca local.</p>
+        <p>{includedCount} imágenes originales vienen incluidas con NEXORA. También puede detectar una instalación legítima de Base Camp o dejarte elegir su carpeta.</p>
         {message && <strong>{message}</strong>}
       </div>
       <label className="library-search"><Search size={16} /><input value={query} onChange={(event) => { setQuery(event.target.value); setLimit(80); }} placeholder={`Buscar entre ${assets.length} recursos`} /></label>
@@ -397,9 +401,9 @@ function LibraryPanel({ assets, onImport, onAssign, onDelete, onImportBaseCamp }
           event.dataTransfer.setData(NEXORA_ASSET_MIME, asset.id);
         }}>
           <div className="asset-preview"><AssetVisual assetId={asset.id} alt={asset.name} />{asset.animated && <span>GIF</span>}</div>
-          <h3>{asset.name}</h3><small>{(asset.sizeBytes / 1024).toFixed(1)} KB · {asset.mimeType.replace("image/", "").toUpperCase()} · {asset.source === "basecamp" ? "Base Camp" : "Usuario"}</small>
+          <h3>{asset.name}</h3><small>{(asset.sizeBytes / 1024).toFixed(1)} KB · {asset.mimeType.replace("image/", "").toUpperCase()} · {asset.source === "basecamp" ? "Base Camp" : asset.source === "nexora" ? "Incluido con NEXORA" : "Usuario"}</small>
           <button type="button" className="secondary-button" onClick={() => onAssign(asset)}>Asignar a tecla seleccionada</button>
-          <button type="button" className="danger-button" onClick={() => { if (!window.confirm(`¿Eliminar “${asset.name}” de la biblioteca y quitarla de todas las teclas?`)) return; void onDelete(asset).then(() => setMessage("Recurso eliminado.")).catch((error) => setMessage(error instanceof Error ? error.message : String(error))); }}><Trash2 size={14} /> Eliminar recurso</button>
+          {asset.source !== "nexora" && <button type="button" className="danger-button" onClick={() => { if (!window.confirm(`¿Eliminar “${asset.name}” de la biblioteca y quitarla de todas las teclas?`)) return; void onDelete(asset).then(() => setMessage("Recurso eliminado.")).catch((error) => setMessage(error instanceof Error ? error.message : String(error))); }}><Trash2 size={14} /> Eliminar recurso</button>}
         </article>)}
         {!filtered.length && <div className="empty-library glass-card"><ImagePlus size={34} /><h2>{assets.length ? "No hay coincidencias" : "Tu biblioteca está vacía"}</h2><p>Admite PNG, JPG, WEBP, SVG y GIF de hasta 12 MB.</p></div>}
       </div>
@@ -863,6 +867,9 @@ function App() {
   const [pressedKeys, setPressedKeys] = useState<Set<number>>(new Set());
   const [obsScenes, setObsScenes] = useState<string[]>([]);
   const [obsCatalog, setObsCatalog] = useState<ObsCatalog>(EMPTY_OBS_CATALOG);
+  const [updatePrompt, setUpdatePrompt] = useState<UpdateStatus | null>(null);
+  const [dismissedUpdate, setDismissedUpdate] = useState<string | null>(null);
+  const [updatePromptBusy, setUpdatePromptBusy] = useState(false);
   const stateRef = useRef<BootstrapState | null>(null);
   const dirtyProfiles = useRef(new Map<string, Profile>());
   const saveTimer = useRef<number | null>(null);
@@ -953,6 +960,10 @@ function App() {
 
   useEffect(() => window.nexoraDesktop?.onEvent((value) => {
     if (!value || typeof value !== "object" || !("type" in value)) return;
+    if (value.type === "update-status" && "status" in value) {
+      setUpdatePrompt(value.status as UpdateStatus);
+      return;
+    }
     if (value.type === "event") {
       const event = value as { name?: string; key?: number };
       if ((event.name === "buttonDown" || event.name === "buttonUp") && Number.isFinite(event.key)) {
@@ -1340,6 +1351,8 @@ function App() {
     </div>
   );
 
+  const updatePromptVisible = shouldShowUpdatePrompt(updatePrompt, dismissedUpdate);
+
   return (
     <div className={`app-shell modern-shell ${section === "displaypad" ? "editor-mode" : ""}`}>
       <main className="main-area">
@@ -1352,6 +1365,23 @@ function App() {
         <div className={`content ${section === "displaypad" ? "editor-content" : ""}`}>{mainContent}</div>
       </main>
       {section !== "displaypad" && editorOpen && selectedConfig && <KeyEditor keyConfig={selectedConfig} assets={state.assets} hardwareReady={state.device.mode === "hardware" && state.device.connected} onImport={importAssets} onApplyHardware={applySelectedKeyToHardware} onChange={updateKey} onClose={() => setEditorOpen(false)} onSave={() => void persistProfile()} />}
+      {updatePromptVisible && updatePrompt && <div className="update-popup-backdrop" role="dialog" aria-modal="true" aria-label="Nueva versión de NEXORA disponible">
+        <section className="update-popup">
+          <div className="update-popup-mark"><Download size={24} /></div>
+          <span className="eyebrow">ACTUALIZACIÓN DISPONIBLE</span>
+          <h2>NEXORA {updatePrompt.availableVersion}</h2>
+          <p>{updatePrompt.message}</p>
+          {updatePrompt.phase === "downloading" && <div className="update-progress"><span style={{ width: `${updatePrompt.progress}%` }} /></div>}
+          <small>Tu configuración, perfiles e imágenes locales se conservarán.</small>
+          <div className="update-popup-actions">
+            <button type="button" className="secondary-button" disabled={updatePromptBusy || updatePrompt.phase === "installing"} onClick={() => setDismissedUpdate(updatePrompt.availableVersion ?? null)}>Más tarde</button>
+            <button type="button" className="primary-button" disabled={updatePromptBusy || updatePrompt.phase === "downloading" || updatePrompt.phase === "installing"} onClick={() => {
+              setUpdatePromptBusy(true);
+              void installAppUpdate().then(setUpdatePrompt).catch((error) => setPluginNotice(`Actualización: ${error instanceof Error ? error.message : String(error)}`)).finally(() => setUpdatePromptBusy(false));
+            }}>{updatePromptBusy || updatePrompt.phase === "downloading" ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />} {updatePrompt.phase === "downloaded" ? "Instalar y reiniciar" : updatePrompt.phase === "downloading" ? `Descargando ${Math.round(updatePrompt.progress)} %` : "Descargar e instalar"}</button>
+          </div>
+        </section>
+      </div>}
       {saving && <div className="toast"><LoaderCircle className="spin" size={16} /> Guardando perfil…</div>}
       {pluginNotice && <div className="toast plugin-toast"><Boxes size={16} /> {pluginNotice}</div>}
     </div>

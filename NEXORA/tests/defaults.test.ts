@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createKey, createProfile } from "../src/lib/defaults";
+import { createKey, createProfile, localBootstrap, NEXORA_PRESET_FILES } from "../src/lib/defaults";
 
 describe("perfil inicial", () => {
   it("crea exactamente doce teclas ordenadas", () => {
@@ -19,6 +19,9 @@ describe("perfil inicial", () => {
     const profile = createProfile("Demo");
     expect(profile.keys.filter((key) => key.actions[0].kind === "obs")).toHaveLength(10);
     expect(profile.keys.filter((key) => key.actions[0].kind === "native")).toHaveLength(2);
+    expect(profile.keys.every((key) => key.iconPath?.startsWith("nexora-preset-"))).toBe(true);
+    expect(NEXORA_PRESET_FILES).toHaveLength(12);
+    expect(localBootstrap.assets).toHaveLength(12);
   });
 });
 

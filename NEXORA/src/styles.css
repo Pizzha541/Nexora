@@ -335,6 +335,16 @@ nav button:hover { color: white; background: rgba(255,255,255,.035); } nav butto
 .hotkey-settings { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; }
 .hotkey-settings label { min-width:0; }
 .hotkey-settings select[multiple] { min-height:92px; padding:6px; }
+.update-popup-backdrop { position:fixed; z-index:80; inset:0; display:grid; place-items:center; padding:24px; background:rgba(0,0,0,.68); backdrop-filter:blur(8px); }
+.update-popup { width:min(430px,100%); padding:28px; border:1px solid #49414f; border-radius:18px; background:linear-gradient(145deg,#262328,#171619); box-shadow:0 28px 80px #000; text-align:center; }
+.update-popup-mark { width:54px; height:54px; display:grid; place-items:center; margin:0 auto 16px; border-radius:15px; color:#fff; background:linear-gradient(145deg,#8b27dd,#4d117c); box-shadow:0 12px 30px rgba(130,36,206,.35); }
+.update-popup h2 { margin:7px 0 8px; font:700 24px Manrope,sans-serif; }
+.update-popup p { margin:0 0 14px; color:#c0bac4; }
+.update-popup small { display:block; margin-top:12px; color:#85808a; }
+.update-popup .update-progress { margin:12px 0 0; }
+.update-popup-actions { display:flex; justify-content:center; gap:9px; margin-top:22px; }
+.update-popup-actions button { min-width:145px; justify-content:center; }
+@media (max-width:560px) { .update-popup-actions { flex-direction:column-reverse; } .update-popup-actions button { width:100%; } }
 .obs-action-library { max-height:680px; overflow:auto; scrollbar-width:thin; scrollbar-color:#4b3b65 transparent; }
 .native-action-row>span { min-width:0; }
 .native-action-row>span strong,.native-action-row>span small { display:block; }

@@ -99,19 +99,34 @@ function createKey(index) {
   return { index, name: `Tecla ${index + 1}`, color: '#000000', text: '', animated: false, actions: [{ kind: 'none' }] };
 }
 
+const nexoraPresetPack = [
+  ['nexora-preset-record', 'record.svg', 'NEXORA · Grabar'],
+  ['nexora-preset-live', 'live.svg', 'NEXORA · Directo'],
+  ['nexora-preset-camera', 'camera.svg', 'NEXORA · Cámara'],
+  ['nexora-preset-replay', 'replay.svg', 'NEXORA · Replay'],
+  ['nexora-preset-save', 'save.svg', 'NEXORA · Guardar'],
+  ['nexora-preset-studio', 'studio.svg', 'NEXORA · Studio Mode'],
+  ['nexora-preset-scenes', 'scenes.svg', 'NEXORA · Escenas'],
+  ['nexora-preset-microphone', 'microphone.svg', 'NEXORA · Micrófono'],
+  ['nexora-preset-visibility', 'visibility.svg', 'NEXORA · Visibilidad'],
+  ['nexora-preset-screenshot', 'screenshot.svg', 'NEXORA · Captura'],
+  ['nexora-preset-channel', 'channel.svg', 'NEXORA · Canal'],
+  ['nexora-preset-chat', 'chat.svg', 'NEXORA · Chat'],
+];
+
 const defaultExamples = [
-  ['OBS · Grabar', '#dc2626', { kind: 'obs', value: 'recordToggle', settings: { longPress: false } }],
-  ['OBS · Directo', '#7c3aed', { kind: 'obs', value: 'streamToggle', settings: { longPress: false } }],
-  ['OBS · Cámara virtual', '#2563eb', { kind: 'obs', value: 'virtualCameraToggle' }],
-  ['OBS · Replay', '#059669', { kind: 'obs', value: 'replayBufferToggle' }],
-  ['OBS · Guardar replay', '#0d9488', { kind: 'obs', value: 'replayBufferSave' }],
-  ['OBS · Studio Mode', '#4f46e5', { kind: 'obs', value: 'studioModeToggle' }],
-  ['OBS · Escena', '#334155', { kind: 'obs', value: 'scene', settings: {} }],
-  ['OBS · Silenciar fuente', '#475569', { kind: 'obs', value: 'inputMuteToggle', settings: {} }],
-  ['OBS · Mostrar fuente', '#374151', { kind: 'obs', value: 'sourceVisibilityToggle', settings: {} }],
-  ['OBS · Captura', '#1f2937', { kind: 'obs', value: 'screenshot', settings: { imageFormat: 'png' } }],
-  ['Twitch · Canal', '#9146ff', { kind: 'native', value: 'twitch.channel', settings: {} }],
-  ['Twitch · Chat', '#772ce8', { kind: 'native', value: 'twitch.chat', settings: {} }],
+  ['OBS · Grabar', '#dc2626', { kind: 'obs', value: 'recordToggle', settings: { longPress: false } }, 'nexora-preset-record'],
+  ['OBS · Directo', '#7c3aed', { kind: 'obs', value: 'streamToggle', settings: { longPress: false } }, 'nexora-preset-live'],
+  ['OBS · Cámara virtual', '#2563eb', { kind: 'obs', value: 'virtualCameraToggle' }, 'nexora-preset-camera'],
+  ['OBS · Replay', '#059669', { kind: 'obs', value: 'replayBufferToggle' }, 'nexora-preset-replay'],
+  ['OBS · Guardar replay', '#0d9488', { kind: 'obs', value: 'replayBufferSave' }, 'nexora-preset-save'],
+  ['OBS · Studio Mode', '#4f46e5', { kind: 'obs', value: 'studioModeToggle' }, 'nexora-preset-studio'],
+  ['OBS · Escena', '#334155', { kind: 'obs', value: 'scene', settings: {} }, 'nexora-preset-scenes'],
+  ['OBS · Silenciar fuente', '#475569', { kind: 'obs', value: 'inputMuteToggle', settings: {} }, 'nexora-preset-microphone'],
+  ['OBS · Mostrar fuente', '#374151', { kind: 'obs', value: 'sourceVisibilityToggle', settings: {} }, 'nexora-preset-visibility'],
+  ['OBS · Captura', '#1f2937', { kind: 'obs', value: 'screenshot', settings: { imageFormat: 'png' } }, 'nexora-preset-screenshot'],
+  ['Twitch · Canal', '#9146ff', { kind: 'native', value: 'twitch.channel', settings: {} }, 'nexora-preset-channel'],
+  ['Twitch · Chat', '#772ce8', { kind: 'native', value: 'twitch.chat', settings: {} }, 'nexora-preset-chat'],
 ];
 
 function createProfile(name = 'Perfil principal') {
@@ -121,8 +136,8 @@ function createProfile(name = 'Perfil principal') {
     description: 'Perfil local de NEXORA',
     keys: Array.from({ length: 12 }, (_, index) => {
       const key = createKey(index);
-      const [name, color, action] = defaultExamples[index];
-      return { ...key, name, color, actions: [structuredClone(action)] };
+      const [name, color, action, iconPath] = defaultExamples[index];
+      return { ...key, name, color, iconPath, actions: [structuredClone(action)] };
     }),
     folders: [],
     updatedAt: new Date().toISOString(),
@@ -222,6 +237,31 @@ function importVisualFiles(files, currentAssets, source = 'basecamp') {
   return { assets, imported };
 }
 
+function ensureNexoraPresetAssets(currentAssets) {
+  const roots = [
+    path.join(app.getAppPath(), 'dist', 'assets', 'presets'),
+    path.join(app.getAppPath(), 'public', 'assets', 'presets'),
+  ];
+  const root = roots.find((candidate) => fs.existsSync(candidate));
+  if (!root) return currentAssets;
+  const assets = [...currentAssets];
+  let changed = false;
+  for (const [id, sourceName, name] of nexoraPresetPack) {
+    const source = path.join(root, sourceName);
+    if (!fs.existsSync(source)) continue;
+    const fileName = `${id}.svg`;
+    const target = path.join(dataRoot, 'assets', fileName);
+    const bytes = fs.readFileSync(source);
+    if (!fs.existsSync(target) || !fs.readFileSync(target).equals(bytes)) fs.writeFileSync(target, bytes);
+    const entry = { id, name, mimeType: 'image/svg+xml', fileName, sizeBytes: bytes.length, animated: false, importedAt: new Date(0).toISOString(), source: 'nexora' };
+    const index = assets.findIndex((asset) => asset.id === id);
+    if (index < 0) { assets.push(entry); changed = true; }
+    else if (JSON.stringify(assets[index]) !== JSON.stringify(entry)) { assets[index] = entry; changed = true; }
+  }
+  if (changed) writeJson(path.join(dataRoot, 'assets', 'index.json'), assets);
+  return assets;
+}
+
 function loadRepository() {
   let profiles = listJson('profiles');
   if (!profiles.length) {
@@ -252,6 +292,24 @@ function loadRepository() {
   }
   let assets = readJson(path.join(dataRoot, 'assets', 'index.json'), [])
     .filter((asset) => fs.existsSync(path.join(dataRoot, 'assets', asset.fileName)));
+  assets = ensureNexoraPresetAssets(assets);
+  if (!settings.nexoraPresetKeysMigrated) {
+    for (const profile of profiles) {
+      let profileChanged = false;
+      const keys = profile.keys.map((key, index) => {
+        const example = defaultExamples[index];
+        if (!example || key.iconPath || key.name !== example[0] || key.actions?.[0]?.kind !== example[2].kind || key.actions?.[0]?.value !== example[2].value) return key;
+        profileChanged = true;
+        return { ...key, iconPath: example[3] };
+      });
+      if (profileChanged) {
+        profile.keys = keys;
+        writeJson(path.join(dataRoot, 'profiles', `${profile.id}.json`), profile);
+      }
+    }
+    settings.nexoraPresetKeysMigrated = true;
+    settingsChanged = true;
+  }
   if (!settings.baseCampAssetsImportedFrom) {
     const baseCampRoot = detectedBaseCampImageRoot();
     if (baseCampRoot) {
@@ -869,6 +927,7 @@ async function invoke(command, args) {
   if (command === 'delete_visual_asset') {
     const asset = repository.assets.find((item) => item.id === args.assetId);
     if (!asset) return null;
+    if (asset.source === 'nexora') throw new Error('Las imágenes incluidas con NEXORA no se pueden eliminar.');
     const removeFromKeys = (keys) => (keys || []).map((key) => key.iconPath === asset.id ? { ...key, iconPath: undefined, animated: false } : key);
     const removeFromFolders = (folders) => (folders || []).map((folder) => ({ ...folder, keys: removeFromKeys(folder.keys), children: removeFromFolders(folder.children) }));
     for (const profile of repository.profiles) {
