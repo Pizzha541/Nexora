@@ -14,6 +14,7 @@ import {
   Layers3,
   LayoutDashboard,
   LoaderCircle,
+  MoreHorizontal,
   MonitorUp,
   PackageOpen,
   Play,
@@ -104,18 +105,19 @@ const cachedVisualAsset = (assetId: string) => {
   return pending;
 };
 
-const navigation: { id: Section; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+const primaryNavigation: { id: Section; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "displaypad", label: "DisplayPad", icon: Gauge },
-  { id: "profiles", label: "Perfiles", icon: Layers3 },
   { id: "library", label: "Biblioteca", icon: ImagePlus },
-  { id: "initial", label: "Initial Screen", icon: ScreenShare },
-  { id: "macros", label: "Macros", icon: Workflow },
   { id: "integrations", label: "Integraciones", icon: PlugZap },
   { id: "plugins", label: "Plugins", icon: Boxes },
-  { id: "settings", label: "Configuración", icon: Settings },
-  { id: "about", label: "Acerca de", icon: CircleHelp },
 ];
+
+const secondaryNavigation: { id: Section; label: string; description: string; icon: typeof LayoutDashboard }[] = [
+  { id: "profiles", label: "Perfiles", description: "Organiza configuraciones", icon: Layers3 },
+  { id: "initial", label: "Pantalla inicial", description: "Configura el arranque físico", icon: ScreenShare },
+  { id: "macros", label: "Automatizaciones", description: "Herramientas avanzadas", icon: Workflow },
+];
+const sectionIds: Section[] = ["dashboard", "displaypad", "profiles", "library", "initial", "macros", "integrations", "plugins", "settings", "about"];
 
 const findFolder = (folders: FolderNode[], id: string | null): FolderNode | undefined => {
   if (!id) return undefined;
@@ -132,41 +134,6 @@ const updateFolderTree = (folders: FolderNode[], id: string, update: (folder: Fo
 
 const removeFolderFromTree = (folders: FolderNode[], id: string): FolderNode[] =>
   folders.filter((folder) => folder.id !== id).map((folder) => ({ ...folder, children: removeFolderFromTree(folder.children, id) }));
-
-function Splash({ onDone }: { onDone: () => void }) {
-  const [videoEnded, setVideoEnded] = useState(false);
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setReady(true), 650);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
-    const watchdog = window.setTimeout(() => setVideoEnded(true), 20_000);
-    return () => window.clearTimeout(watchdog);
-  }, []);
-
-  useEffect(() => {
-    if (videoEnded && ready) onDone();
-  }, [videoEnded, ready, onDone]);
-
-  return (
-    <div className="splash">
-      <video
-        autoPlay
-        muted
-        playsInline
-        className="splash-video"
-        src={bundledAsset("intro.mp4")}
-        onEnded={() => setVideoEnded(true)}
-        onError={() => setVideoEnded(true)}
-      />
-      <div className="splash-status"><LoaderCircle size={16} className="spin" /> Inicializando NEXORA</div>
-      <button type="button" className="splash-skip" onClick={() => setVideoEnded(true)}>Omitir intro</button>
-    </div>
-  );
-}
 
 function StatusPill({ connected, mode }: { connected: boolean; mode: DeviceMode }) {
   return (
@@ -854,9 +821,9 @@ function MacrosPanel({ macros, onChange }: { macros: MacroDefinition[]; onChange
 function App() {
   const queryParameters = new URLSearchParams(window.location.search);
   const requestedSection = queryParameters.get("section") as Section | null;
-  const initialSection: Section = requestedSection && navigation.some((item) => item.id === requestedSection) ? requestedSection : "displaypad";
-  const [splash, setSplash] = useState(!queryParameters.has("capture"));
+  const initialSection: Section = requestedSection && sectionIds.includes(requestedSection) ? requestedSection : "displaypad";
   const [section, setSection] = useState<Section>(initialSection);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [state, setState] = useState<BootstrapState | null>(null);
   const [selectedKey, setSelectedKey] = useState(0);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
@@ -1242,7 +1209,6 @@ function App() {
     setSelectedKey(0);
   };
 
-  if (splash) return <Splash onDone={() => setSplash(false)} />;
   if (!state || !activeProfile) return <div className="app-loading"><LoaderCircle className="spin" /> Cargando NEXORA…</div>;
 
   const mainContent = section === "integrations" ? <IntegrationPanel state={state} selectedKey={selectedKey} onRefresh={refresh} onAssign={assignNativeAction} /> : section === "library" ? (
@@ -1268,10 +1234,6 @@ function App() {
           <div><span className="eyebrow">EDITOR EN TIEMPO REAL</span><h1>{selectedFolder?.name ?? activeProfile.name}</h1></div>
           <div className="stage-controls">
             <select aria-label="Perfil activo" value={activeProfile.id} onChange={(event) => { const profile = state.profiles.find((item) => item.id === event.target.value); if (profile) void selectProfile(profile); }}>{state.profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select>
-            <StatusPill connected={state.device.connected} mode={state.device.mode} />
-            <button type="button" className="icon-button" title="Plugin Hub" aria-label="Abrir Plugin Hub" onClick={() => setSection("plugins")}><Boxes size={17} /></button>
-            <button type="button" className="icon-button" title="Configuración y actualizaciones" aria-label="Abrir configuración" onClick={() => setSection("settings")}><Settings size={17} /></button>
-            <button type="button" className="icon-button" title="Acerca de NEXORA" aria-label="Abrir Acerca de" onClick={() => setSection("about")}><CircleHelp size={17} /></button>
           </div>
         </div>
         <div className="stage-folder-bar">
@@ -1299,7 +1261,7 @@ function App() {
             onAssetDrop={assignAssetToKey}
             onFileDrop={(key, files) => { void importFilesToKey(key, files); }}
           />
-          <div className="stage-hint"><span>Doble clic para probar</span><span>Arrastra acciones, imágenes o teclas</span></div>
+          <div className="stage-hint"><span>1 · Selecciona una tecla</span><span>2 · Elige una acción</span><span>3 · Configúrala abajo</span></div>
         </div>
         <div className="stage-footer">
           <span><Cpu size={14} /> {state.device.name}</span>
@@ -1358,8 +1320,16 @@ function App() {
       <main className="main-area">
         <header className="modern-appbar">
           <button type="button" className="modern-brand" onClick={() => setSection("displaypad")} title="Volver al DisplayPad"><img src={bundledAsset("noxoralogo.png")} alt="" /><span>NEXORA<small>v{state.version}</small></span></button>
-          <nav className="modern-tabs" aria-label="Secciones de NEXORA">{navigation.filter((item) => !["settings", "about"].includes(item.id)).map((item) => <button type="button" key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)} title={item.label}><item.icon size={16} /><span>{item.label}</span></button>)}</nav>
-          <div className="modern-app-actions"><StatusPill connected={state.device.connected} mode={state.device.mode} /><button type="button" className={`icon-button ${section === "settings" ? "active" : ""}`} title="Configuración" onClick={() => setSection("settings")}><Settings size={17} /></button><button type="button" className={`icon-button ${section === "about" ? "active" : ""}`} title="Acerca de" onClick={() => setSection("about")}><CircleHelp size={17} /></button></div>
+          <nav className="modern-tabs" aria-label="Secciones principales de NEXORA">{primaryNavigation.map((item) => <button type="button" key={item.id} className={section === item.id ? "active" : ""} onClick={() => { setSection(item.id); setMoreOpen(false); }} title={item.label}><item.icon size={16} /><span>{item.label}</span></button>)}</nav>
+          <div className="modern-app-actions">
+            <div className={`more-navigation ${moreOpen ? "open" : ""}`}>
+              <button type="button" className={`more-navigation-trigger ${secondaryNavigation.some((item) => item.id === section) ? "active" : ""}`} onClick={() => setMoreOpen((value) => !value)} aria-expanded={moreOpen}><MoreHorizontal size={17} /><span>Más</span></button>
+              {moreOpen && <div className="more-navigation-menu">{secondaryNavigation.map((item) => <button type="button" key={item.id} className={section === item.id ? "active" : ""} onClick={() => { setSection(item.id); setMoreOpen(false); }}><item.icon size={17} /><span><strong>{item.label}</strong><small>{item.description}</small></span></button>)}</div>}
+            </div>
+            <StatusPill connected={state.device.connected} mode={state.device.mode} />
+            <button type="button" className={`icon-button ${section === "settings" ? "active" : ""}`} title="Configuración" onClick={() => { setSection("settings"); setMoreOpen(false); }}><Settings size={17} /></button>
+            <button type="button" className={`icon-button ${section === "about" ? "active" : ""}`} title="Acerca de" onClick={() => { setSection("about"); setMoreOpen(false); }}><CircleHelp size={17} /></button>
+          </div>
         </header>
         {state.startupWarning && <div className="recovery-banner">{state.startupWarning}</div>}
         <div className={`content ${section === "displaypad" ? "editor-content" : ""}`}>{mainContent}</div>

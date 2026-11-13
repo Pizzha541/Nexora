@@ -39,6 +39,7 @@ type LibraryAction = {
   icon: ReactNode;
   native?: NativeActionDrop;
   plugin?: PluginDrop;
+  recommended?: boolean;
 };
 
 type LibraryCategory = { id: string; name: string; icon: ReactNode; actions: LibraryAction[] };
@@ -58,6 +59,7 @@ function buildCategories(
       name: scene,
       description: "Cambiar escena de OBS",
       icon: <MonitorPlay size={16} />,
+      recommended: true,
       native: nativeAction("obs", "scene", `OBS · ${scene}`, { sceneName: scene }),
     })),
   ];
@@ -68,6 +70,7 @@ function buildCategories(
       name: action.name,
       description: action.description,
       icon: <Radio size={16} />,
+      recommended: ["record-toggle", "stream-toggle", "scene", "audio-mute", "source-visibility", "replay-save"].includes(action.id),
       native: nativeAction(action.kind, action.value, action.name, action.settings),
     })),
   ];
@@ -104,8 +107,8 @@ function buildCategories(
       name: "Multi Action",
       icon: <Layers3 size={16} />,
       actions: [
-        { id: "multi-action", name: "Multi Action", description: "Ejecuta varias acciones en orden", icon: <Layers3 size={16} />, native: { kind: "multiAction" as const, value: "multiAction", name: "Multi Action", steps: [] } },
-        { id: "multi-switch", name: "Multi Action Switch", description: "Alterna entre dos secuencias", icon: <Layers3 size={16} />, native: { kind: "multiSwitch" as const, value: "multiSwitch", name: "Multi Action Switch", states: [[], []] as [SequenceStep[], SequenceStep[]] } },
+        { id: "multi-action", name: "Multi Action", description: "Ejecuta varias acciones en orden", icon: <Layers3 size={16} />, recommended: true, native: { kind: "multiAction" as const, value: "multiAction", name: "Multi Action", steps: [] } },
+        { id: "multi-switch", name: "Multi Action Switch", description: "Alterna entre dos secuencias", icon: <Layers3 size={16} />, recommended: true, native: { kind: "multiSwitch" as const, value: "multiSwitch", name: "Multi Action Switch", states: [[], []] as [SequenceStep[], SequenceStep[]] } },
       ],
     },
     {
@@ -113,9 +116,9 @@ function buildCategories(
       name: "Sistema",
       icon: <AppWindow size={16} />,
       actions: [
-        { id: "hotkey", name: "Atajo de teclado", description: "Envía una combinación configurable", icon: <AppWindow size={16} />, native: { kind: "hotkey" as const, value: "A", name: "Atajo de teclado", settings: { modifiers: ["control"] } } },
-        { id: "open-url", name: "Abrir página web", description: "Abre una dirección segura", icon: <Globe2 size={16} />, native: nativeAction("openUrl", "", "Abrir página web") },
-        { id: "launch-path", name: "Abrir aplicación o archivo", description: "Selecciona el archivo en el inspector", icon: <FolderOpen size={16} />, native: nativeAction("launchPath", "", "Abrir aplicación") },
+        { id: "hotkey", name: "Atajo de teclado", description: "Envía una combinación configurable", icon: <AppWindow size={16} />, recommended: true, native: { kind: "hotkey" as const, value: "A", name: "Atajo de teclado", settings: { modifiers: ["control"] } } },
+        { id: "open-url", name: "Abrir página web", description: "Abre una dirección segura", icon: <Globe2 size={16} />, recommended: true, native: nativeAction("openUrl", "", "Abrir página web") },
+        { id: "launch-path", name: "Abrir aplicación o archivo", description: "Selecciona el archivo en el inspector", icon: <FolderOpen size={16} />, recommended: true, native: nativeAction("launchPath", "", "Abrir aplicación") },
       ],
     },
     {
@@ -129,19 +132,19 @@ function buildCategories(
         ["volumeDown", "Bajar volumen", Volume2],
         ["volumeUp", "Subir volumen", Volume2],
         ["mute", "Silenciar", Volume2],
-      ].map(([value, name, Icon]) => ({ id: `media-${value}`, name: String(name), description: "Control multimedia de Windows", icon: <Icon size={16} />, native: nativeAction("media", String(value), String(name)) })),
+      ].map(([value, name, Icon]) => ({ id: `media-${value}`, name: String(name), description: "Control multimedia de Windows", icon: <Icon size={16} />, recommended: ["playPause", "volumeDown", "volumeUp", "mute"].includes(String(value)), native: nativeAction("media", String(value), String(name)) })),
     },
     {
       id: "profiles",
       name: "Perfiles",
       icon: <Layers3 size={16} />,
-      actions: profiles.map((profile) => ({ id: `profile-${profile.id}`, name: profile.name, description: "Cambiar a este perfil", icon: <Layers3 size={16} />, native: nativeAction("profile", profile.id, `Perfil · ${profile.name}`) })),
+      actions: profiles.map((profile) => ({ id: `profile-${profile.id}`, name: profile.name, description: "Cambiar a este perfil", icon: <Layers3 size={16} />, recommended: true, native: nativeAction("profile", profile.id, `Perfil · ${profile.name}`) })),
     },
     {
       id: "folders",
       name: "Carpetas",
       icon: <FolderOpen size={16} />,
-      actions: flattenFolders(folders).map((folder) => ({ id: `folder-${folder.id}`, name: folder.name, description: "Abrir esta carpeta del DisplayPad", icon: <FolderOpen size={16} />, native: nativeAction("folder", folder.id, `Carpeta · ${folder.name}`) })),
+      actions: flattenFolders(folders).map((folder) => ({ id: `folder-${folder.id}`, name: folder.name, description: "Abrir esta carpeta del DisplayPad", icon: <FolderOpen size={16} />, recommended: true, native: nativeAction("folder", folder.id, `Carpeta · ${folder.name}`) })),
     },
     { id: "obs", name: "OBS Studio", icon: <Radio size={16} />, actions: obs },
     ...nativePluginCategories,
@@ -150,7 +153,7 @@ function buildCategories(
 }
 
 export function EditorWorkspace({ library, center, inspector }: { library: ReactNode; center: ReactNode; inspector: ReactNode }) {
-  const [rightWidth, setRightWidth] = useState(300);
+  const [rightWidth, setRightWidth] = useState(280);
   const [rightOpen, setRightOpen] = useState(true);
 
   const resize = (event: ReactPointerEvent) => {
@@ -159,7 +162,7 @@ export function EditorWorkspace({ library, center, inspector }: { library: React
     const initial = rightWidth;
     const move = (moveEvent: PointerEvent) => {
       const delta = moveEvent.clientX - startX;
-      setRightWidth(Math.max(250, Math.min(430, initial - delta)));
+      setRightWidth(Math.max(240, Math.min(380, initial - delta)));
     };
     const stop = () => {
       window.removeEventListener("pointermove", move);
@@ -195,22 +198,23 @@ export function ActionLibrary({ profiles, folders, plugins, obsScenes, obsConnec
   onAssignPlugin: (action: PluginDrop) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [closed, setClosed] = useState<Set<string>>(new Set());
+  const [closed, setClosed] = useState<Set<string>>(new Set(["system", "media", "profiles", "folders"]));
   const [view, setView] = useState<"keys" | "plugins">("keys");
+  const [mode, setMode] = useState<"basic" | "advanced">("basic");
   const categories = buildCategories(profiles, folders, plugins, obsScenes);
   const normalized = query.trim().toLocaleLowerCase("es");
 
-  return <div className="action-library">
-    <header><span className="eyebrow">BIBLIOTECA</span><h2>Acciones</h2></header>
+  return <div className={`action-library ${mode}`}>
+    <header><div><span className="eyebrow">BIBLIOTECA</span><h2>Acciones</h2></div><div className="library-mode"><button type="button" className={mode === "basic" ? "active" : ""} onClick={() => setMode("basic")}>Básico</button><button type="button" className={mode === "advanced" ? "active" : ""} onClick={() => setMode("advanced")}>Todo</button></div></header>
     <label className="editor-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar acciones" /></label>
-    <div className="library-tabs"><button type="button" className={view === "keys" ? "active" : ""} onClick={() => setView("keys")}>Teclas</button><button type="button" className={view === "plugins" ? "active" : ""} onClick={() => setView("plugins")}>Plugins</button></div>
+    <div className="library-tabs"><button type="button" className={view === "keys" ? "active" : ""} onClick={() => setView("keys")}>Teclas</button><button type="button" className={view === "plugins" ? "active" : ""} onClick={() => { setView("plugins"); setMode("advanced"); }}>Plugins</button></div>
     {view === "keys" && !obsConnected && <button type="button" className="obs-disconnected" onClick={onRefreshObs}><Radio size={14} /> Conecta OBS para cargar escenas</button>}
     {view === "keys" && obsConnected && <button type="button" className="library-refresh" onClick={onRefreshObs}><RefreshCw size={13} /> Actualizar escenas</button>}
     <div className="action-categories">
       {categories.map((category) => {
         const isPlugin = category.id.startsWith("plugin-");
         if ((view === "plugins") !== isPlugin) return null;
-        const actions = category.actions.filter((action) => !normalized || `${action.name} ${action.description} ${category.name}`.toLocaleLowerCase("es").includes(normalized));
+        const actions = category.actions.filter((action) => (view === "plugins" || mode === "advanced" || action.recommended || normalized) && (!normalized || `${action.name} ${action.description} ${category.name}`.toLocaleLowerCase("es").includes(normalized)));
         if (!actions.length) return null;
         const isClosed = closed.has(category.id);
         return <section className="action-category" key={category.id}>
@@ -267,7 +271,9 @@ export function KeyInspector({ keyConfig, assetPreview, assets, profiles, folder
   const [sequenceOpen, setSequenceOpen] = useState(false);
   const [switchTab, setSwitchTab] = useState<0 | 1>(0);
   const [newSequenceAction, setNewSequenceAction] = useState("obs-record-toggle");
+  const [appearanceOpen, setAppearanceOpen] = useState(action.kind === "none");
   useEffect(() => { setSequenceOpen(action.kind === "multiAction" || action.kind === "multiSwitch"); setSwitchTab(0); }, [keyConfig.index, action.kind]);
+  useEffect(() => { setAppearanceOpen(action.kind === "none"); }, [keyConfig.index]);
   const setAction = (change: Record<string, unknown>) => onChange({ ...keyConfig, actions: [{ ...action, ...change }] });
   const plugin = action.kind === "plugin" ? plugins.find((item) => item.id === action.pluginId) : undefined;
   const pluginAction = plugin?.actions.find((item) => item.id === action.actionId);
@@ -327,24 +333,27 @@ export function KeyInspector({ keyConfig, assetPreview, assets, profiles, folder
   };
 
   return <div className="key-inspector">
-    <header><span className="eyebrow">TECLA {keyConfig.index + 1}</span><h2>Propiedades</h2><small>Guardado automático</small></header>
-    <div className={`inspector-preview ${assetPreview ? "has-image" : ""} ${action.kind === "none" ? "empty" : ""}`} style={{ "--key-color": keyConfig.color } as React.CSSProperties}>{assetPreview}{keyConfig.text && <span className={assetPreview ? "key-text-overlay" : "key-text-only"}>{keyConfig.text}</span>}{!assetPreview && !keyConfig.text && action.kind !== "none" && <PlugZap size={25} />}</div>
-    <label>Nombre<input value={keyConfig.name} maxLength={40} onChange={(event) => onChange({ ...keyConfig, name: event.target.value })} /></label>
-    <div className="inspector-row"><label>Texto<input value={keyConfig.text} maxLength={12} onChange={(event) => onChange({ ...keyConfig, text: event.target.value })} /></label><label>Color<input className="color-input" type="color" value={keyConfig.color} onChange={(event) => onChange({ ...keyConfig, color: event.target.value })} /></label></div>
-    <label>Imagen o GIF<select value={keyConfig.iconPath ?? ""} onChange={(event) => { const asset = assets.find((item) => item.id === event.target.value); onChange({ ...keyConfig, iconPath: event.target.value || undefined, animated: asset?.animated ?? false }); }}><option value="">Sin imagen</option>{assets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name}{asset.animated ? " · GIF" : ""}</option>)}</select></label>
-    {keyConfig.iconPath && <button type="button" className="secondary-button inspector-wide" onClick={() => onChange({ ...keyConfig, iconPath: undefined, animated: false })}><Trash2 size={14} /> Quitar imagen de esta tecla</button>}
-    <label className="file-button inspector-file"><ImagePlus size={15} /> Importar imagen o GIF<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={(event) => { if (!event.target.files?.length) return; void onImport(event.target.files).then(([asset]) => { if (asset) onChange({ ...keyConfig, iconPath: asset.id, animated: asset.animated }); }); event.target.value = ""; }} /></label>
-    <div className="assigned-action"><span>Acción asignada</span><strong>{actionLabel(keyConfig, profiles, folders, plugins)}</strong></div>
-    {action.kind === "openUrl" && <label>Dirección web<input value={action.value ?? ""} placeholder="https://…" onChange={(event) => setAction({ value: event.target.value })} /></label>}
-    {action.kind === "launchPath" && <label>Aplicación o archivo<div className="path-picker"><input readOnly value={action.value ?? ""} placeholder="Selecciona un archivo" /><button type="button" onClick={() => void onPickFile().then((value) => value && setAction({ value }))}>Examinar</button></div></label>}
-    {action.kind === "hotkey" && <div className="hotkey-settings"><label>Tecla<input value={action.value ?? ""} maxLength={8} placeholder="A, F1, ENTER…" onChange={(event) => setAction({ value: event.target.value.toUpperCase() })} /></label><label>Modificadores<select multiple value={(action.settings?.modifiers as string[] | undefined) ?? []} onChange={(event) => setAction({ settings: { ...action.settings, modifiers: [...event.target.selectedOptions].map((option) => option.value) } })}><option value="control">Ctrl</option><option value="shift">Shift</option><option value="alt">Alt</option><option value="meta">Windows</option></select></label></div>}
-    {action.kind === "profile" && <label>Perfil<select value={action.value ?? ""} onChange={(event) => setAction({ value: event.target.value })}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>}
-    {action.kind === "folder" && <label>Carpeta<select value={action.value ?? ""} onChange={(event) => setAction({ value: event.target.value })}>{allFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>}
-    {nativeDefinition?.fields?.map((field) => renderNativeField(field))}
-    {(action.kind === "multiAction" || action.kind === "multiSwitch") && <button type="button" className="primary-button inspector-wide" onClick={() => setSequenceOpen(true)}><Layers3 size={15} /> Abrir editor · {action.kind === "multiSwitch" ? `${action.states?.[0]?.length ?? 0} / ${action.states?.[1]?.length ?? 0}` : action.steps?.length ?? 0} acciones</button>}
-    {action.kind === "plugin" && plugin && pluginAction?.configurable && <button type="button" className="secondary-button inspector-wide" onClick={() => onOpenPluginInspector(plugin, pluginAction.id, action.settings ?? {})}><PlugZap size={15} /> Configurar plugin</button>}
-    <div className="inspector-actions"><button type="button" className="primary-button" disabled={action.kind === "none"} onClick={onTest}><CirclePlay size={16} /> Probar acción</button><button type="button" className="danger-button" disabled={action.kind === "none"} onClick={() => onChange({ ...keyConfig, actions: [{ kind: "none" }] })}><Trash2 size={15} /> Quitar</button></div>
-    <p className="inspector-note">Arrastra una acción sobre una tecla o haz clic para asignarla a la tecla seleccionada.</p>
+    <header><div><span className="eyebrow">TECLA {keyConfig.index + 1}</span><h2>Configurar tecla</h2></div><small>Guardado automático</small></header>
+    <div className="inspector-overview">
+      <div className={`inspector-preview ${assetPreview ? "has-image" : ""} ${action.kind === "none" ? "empty" : ""}`} style={{ "--key-color": keyConfig.color } as React.CSSProperties}>{assetPreview}{keyConfig.text && <span className={assetPreview ? "key-text-overlay" : "key-text-only"}>{keyConfig.text}</span>}{!assetPreview && !keyConfig.text && action.kind !== "none" && <PlugZap size={25} />}</div>
+      <div className="inspector-primary"><label>Nombre<input value={keyConfig.name} maxLength={40} onChange={(event) => onChange({ ...keyConfig, name: event.target.value })} /></label><div className="assigned-action"><span>Acción</span><strong>{actionLabel(keyConfig, profiles, folders, plugins)}</strong></div></div>
+      <div className="inspector-actions"><button type="button" className="primary-button" disabled={action.kind === "none"} onClick={onTest}><CirclePlay size={16} /> Probar</button><button type="button" className="danger-button" disabled={action.kind === "none"} onClick={() => onChange({ ...keyConfig, actions: [{ kind: "none" }] })}><Trash2 size={15} /> Quitar</button></div>
+    </div>
+    {action.kind === "none" && <div className="inspector-empty-action"><PlugZap size={16} /><span>Elige una acción en la biblioteca de la derecha.</span></div>}
+    {action.kind !== "none" && <div className="inspector-action-settings">
+      {action.kind === "openUrl" && <label>Dirección web<input value={action.value ?? ""} placeholder="https://…" onChange={(event) => setAction({ value: event.target.value })} /></label>}
+      {action.kind === "launchPath" && <label>Aplicación o archivo<div className="path-picker"><input readOnly value={action.value ?? ""} placeholder="Selecciona un archivo" /><button type="button" onClick={() => void onPickFile().then((value) => value && setAction({ value }))}>Examinar</button></div></label>}
+      {action.kind === "hotkey" && <div className="hotkey-settings"><label>Tecla<input value={action.value ?? ""} maxLength={8} placeholder="A, F1, ENTER…" onChange={(event) => setAction({ value: event.target.value.toUpperCase() })} /></label><label>Modificadores<select multiple value={(action.settings?.modifiers as string[] | undefined) ?? []} onChange={(event) => setAction({ settings: { ...action.settings, modifiers: [...event.target.selectedOptions].map((option) => option.value) } })}><option value="control">Ctrl</option><option value="shift">Shift</option><option value="alt">Alt</option><option value="meta">Windows</option></select></label></div>}
+      {action.kind === "profile" && <label>Perfil<select value={action.value ?? ""} onChange={(event) => setAction({ value: event.target.value })}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>}
+      {action.kind === "folder" && <label>Carpeta<select value={action.value ?? ""} onChange={(event) => setAction({ value: event.target.value })}>{allFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>}
+      {nativeDefinition?.fields?.map((field) => renderNativeField(field))}
+      {(action.kind === "multiAction" || action.kind === "multiSwitch") && <button type="button" className="primary-button inspector-wide" onClick={() => setSequenceOpen(true)}><Layers3 size={15} /> Editar secuencia · {action.kind === "multiSwitch" ? `${action.states?.[0]?.length ?? 0} / ${action.states?.[1]?.length ?? 0}` : action.steps?.length ?? 0}</button>}
+      {action.kind === "plugin" && plugin && pluginAction?.configurable && <button type="button" className="secondary-button inspector-wide" onClick={() => onOpenPluginInspector(plugin, pluginAction.id, action.settings ?? {})}><PlugZap size={15} /> Configurar plugin</button>}
+    </div>}
+    <details className="inspector-appearance" open={appearanceOpen} onToggle={(event) => setAppearanceOpen(event.currentTarget.open)}>
+      <summary><ImagePlus size={15} /><span><strong>Apariencia</strong><small>Imagen, texto y color</small></span><ChevronDown size={14} /></summary>
+      <div className="inspector-appearance-fields"><div className="inspector-row"><label>Texto<input value={keyConfig.text} maxLength={12} onChange={(event) => onChange({ ...keyConfig, text: event.target.value })} /></label><label>Color<input className="color-input" type="color" value={keyConfig.color} onChange={(event) => onChange({ ...keyConfig, color: event.target.value })} /></label></div><label>Imagen o GIF<select value={keyConfig.iconPath ?? ""} onChange={(event) => { const asset = assets.find((item) => item.id === event.target.value); onChange({ ...keyConfig, iconPath: event.target.value || undefined, animated: asset?.animated ?? false }); }}><option value="">Sin imagen</option>{assets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name}{asset.animated ? " · GIF" : ""}</option>)}</select></label><label className="file-button inspector-file"><ImagePlus size={15} /> Importar<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={(event) => { if (!event.target.files?.length) return; void onImport(event.target.files).then(([asset]) => { if (asset) onChange({ ...keyConfig, iconPath: asset.id, animated: asset.animated }); }); event.target.value = ""; }} /></label>{keyConfig.iconPath && <button type="button" className="secondary-button" onClick={() => onChange({ ...keyConfig, iconPath: undefined, animated: false })}><Trash2 size={14} /> Quitar imagen</button>}</div>
+    </details>
     {sequenceOpen && (action.kind === "multiAction" || action.kind === "multiSwitch") && <div className="sequence-modal" role="dialog" aria-label="Editor de acciones múltiples">
       <header><button type="button" className="sequence-back" onClick={() => setSequenceOpen(false)}><ChevronLeft size={18} /> Volver</button><div><span className="eyebrow">TECLA {keyConfig.index + 1}</span><h2>{action.kind === "multiSwitch" ? "Multi Action Switch" : "Multi Action"}</h2></div><button type="button" className="icon-button" onClick={() => setSequenceOpen(false)} aria-label="Cerrar editor"><PanelRightClose size={18} /></button></header>
       {action.kind === "multiSwitch" && <div className="sequence-tabs"><button type="button" className={switchTab === 0 ? "active" : ""} onClick={() => setSwitchTab(0)}>Estado 1</button><button type="button" className={switchTab === 1 ? "active" : ""} onClick={() => setSwitchTab(1)}>Estado 2</button></div>}

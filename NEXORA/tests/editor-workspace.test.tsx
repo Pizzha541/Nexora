@@ -32,6 +32,7 @@ describe("editor DisplayPad", () => {
     const onAssignPlugin = vi.fn();
     render(<ActionLibrary profiles={[profile]} folders={[]} plugins={[plugin]} obsScenes={["Cámara"]} obsConnected onRefreshObs={vi.fn()} onAssignNative={onAssignNative} onAssignPlugin={onAssignPlugin} />);
 
+    fireEvent.click(screen.getByRole("button", { name: "Sistema" }));
     const webAction = screen.getByRole("button", { name: /Abrir página web/ });
     const dataTransfer = { effectAllowed: "", setData: vi.fn() };
     fireEvent.dragStart(webAction, { dataTransfer });
