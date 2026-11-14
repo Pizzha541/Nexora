@@ -1,7 +1,7 @@
 {
   "name": "nexora",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Control profesional para Mountain DisplayPad con imágenes, GIF, perfiles e integraciones.",
   "author": "NEXORA",
   "main": "electron/main.cjs",
@@ -53,6 +53,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "THIRD_PARTY_NOTICES.md",
       "package.json"
     ],
     "extraResources": [

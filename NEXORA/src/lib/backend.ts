@@ -84,6 +84,15 @@ export async function setDeviceMode(mode: DeviceMode): Promise<BootstrapState["d
   }
 }
 
+export async function setAutoDetectDevice(enabled: boolean): Promise<boolean> {
+  try {
+    return await invoke<boolean>("set_auto_detect_device", { enabled });
+  } catch {
+    localStorage.setItem("nexora.autoDetectDevice", String(enabled));
+    return enabled;
+  }
+}
+
 export async function refreshDeviceStatus(): Promise<BootstrapState["device"]> {
   try {
     return await invoke("refresh_device_status");

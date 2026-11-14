@@ -47,6 +47,7 @@ import {
   setActiveProfile,
   setProfileOrder,
   setDeviceMode,
+  setAutoDetectDevice,
   testObsConnection,
   applyHardwareKey,
   applyHardwarePage,
@@ -102,14 +103,20 @@ const EMPTY_OBS_CATALOG: ObsCatalog = { currentScene: "", scenes: [], inputs: []
 const EMPTY_VOXORA_CATALOG: VoxoraCatalog = { protocolVersion: "", voxoraVersion: "", engine: { ready: false, state: "offline" }, capabilities: {}, voices: [], settings: {}, status: {} };
 const bundledAsset = (name: string) => `${import.meta.env.BASE_URL}assets/${name}`;
 const visualAssetCache = new Map<string, Promise<string>>();
+const MAX_VISUAL_ASSET_CACHE = 180;
 const cachedVisualAsset = (assetId: string) => {
   const existing = visualAssetCache.get(assetId);
-  if (existing) return existing;
+  if (existing) {
+    visualAssetCache.delete(assetId);
+    visualAssetCache.set(assetId, existing);
+    return existing;
+  }
   const pending = readVisualAsset(assetId).catch((error) => {
     visualAssetCache.delete(assetId);
     throw error;
   });
   visualAssetCache.set(assetId, pending);
+  while (visualAssetCache.size > MAX_VISUAL_ASSET_CACHE) visualAssetCache.delete(visualAssetCache.keys().next().value as string);
   return pending;
 };
 
@@ -159,29 +166,30 @@ function AssetVisual({ assetId, alt = "" }: { assetId: string; alt?: string }) {
     void cachedVisualAsset(assetId).then((value) => { if (active) setSource(value); }).catch(() => undefined);
     return () => { active = false; };
   }, [assetId]);
-  return source ? <img className="asset-visual" src={source} alt={alt} /> : <span className="asset-loading"><LoaderCircle className="spin" size={15} /></span>;
+  return source ? <img className="asset-visual" src={source} alt={alt} loading="lazy" decoding="async" /> : <span className="asset-loading"><LoaderCircle className="spin" size={15} /></span>;
 }
 
-function DefaultActionIcon({ action, state }: { action?: KeyAction; state?: number }) {
+function DefaultActionIcon({ action, color = "#111827" }: { action?: KeyAction; color?: string }) {
   if (!action || action.kind === "none") return null;
-  const Icon = action.kind === "obs" ? (action.value === "screenshot" ? ImagePlus : action.value === "scene" || action.value === "previewScene" ? ScreenShare : Radio)
-    : action.kind === "multiAction" || action.kind === "multiSwitch" || action.kind === "macro" ? Workflow
-    : action.kind === "media" ? Play
-    : action.kind === "profile" ? Layers3
-    : action.kind === "folder" ? FolderTree
-    : action.kind === "plugin" ? Boxes
-    : action.kind === "launchPath" ? PackageOpen
-    : action.kind === "openUrl" ? ScreenShare
-    : PlugZap;
-  return <span className={`default-action-icon action-${action.kind}`}><Icon size={34} />{action.kind === "multiSwitch" && <b>{(state ?? 0) + 1}</b>}</span>;
+  const labels: Record<string, string> = {
+    recordToggle: "REC", recordStart: "REC", recordStop: "STOP", streamToggle: "LIVE", streamStart: "LIVE", streamStop: "OFF",
+    scene: "SCN", previewScene: "PREV", virtualCameraToggle: "CAM", replayBufferToggle: "RPL", replayBufferSave: "SAVE",
+    studioModeToggle: "STD", sourceVisibilityToggle: "EYE", inputMuteToggle: "MIC", screenshot: "SHOT", transition: "FX", filterToggle: "FLT",
+  };
+  const fallback: Partial<Record<KeyAction["kind"], string>> = { multiAction: "MULTI", multiSwitch: "SW", hotkey: "KEY", media: "MEDIA", profile: "PROF", folder: "DIR", openUrl: "WEB", launchPath: "APP", plugin: "PLUG", native: "APP", obs: "OBS" };
+  const label = (labels[action.value || ""] || fallback[action.kind] || "NX").slice(0, 5);
+  const safeColor = /^#[0-9a-f]{6}$/i.test(color) ? color : "#111827";
+  const fontSize = label.length > 4 ? 16 : 20;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="102" height="102" viewBox="0 0 102 102"><defs><radialGradient id="g"><stop offset="0" stop-color="${safeColor}"/><stop offset="1" stop-color="#050506"/></radialGradient></defs><rect width="102" height="102" rx="16" fill="url(#g)"/><rect x="19" y="19" width="64" height="64" rx="14" fill="none" stroke="#fff" stroke-width="4" opacity=".9"/><text x="51" y="58" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="${fontSize}" font-weight="700">${label}</text></svg>`;
+  return <span className={`default-action-icon action-${action.kind}`}><img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`} alt="" /></span>;
 }
 
-function KeyArtwork({ assetId, image, text, alt, action, state }: { assetId?: string; image?: string; text?: string; alt: string; action?: KeyAction; state?: number }) {
+function KeyArtwork({ assetId, image, text, alt, action, color }: { assetId?: string; image?: string; text?: string; alt: string; action?: KeyAction; state?: number; color?: string }) {
   const hasImage = Boolean(assetId || image);
   return <span className={`key-artwork ${hasImage ? "has-image" : ""} ${action && action.kind !== "none" ? "has-action" : ""}`}>
-    {image ? <img className="asset-visual" src={image} alt={alt} /> : assetId ? <AssetVisual assetId={assetId} alt={alt} /> : null}
-    {!hasImage && <DefaultActionIcon action={action} state={state} />}
-    {text && <span className={hasImage ? "key-text-overlay" : "key-text-only"}>{text}</span>}
+    {image ? <img className="asset-visual" src={image} alt={alt} loading="lazy" decoding="async" /> : assetId ? <AssetVisual assetId={assetId} alt={alt} /> : null}
+    {!hasImage && <DefaultActionIcon action={action} color={color} />}
+    {text && <span className={hasImage ? "key-text-overlay" : "key-text-only"}>{text.trim().slice(0, 24)}</span>}
   </span>;
 }
 
@@ -267,7 +275,7 @@ function KeyGrid({ keys, selected, pressedKeys = new Set(), runtimeFeedback = {}
           }}
         >
           {!empty && <span className="key-glow" />}
-          <span className="key-content"><KeyArtwork assetId={empty || feedback?.image ? undefined : key.iconPath} image={empty ? undefined : feedback?.image} text={empty ? "" : feedback?.title || key.text} alt={feedback?.title || key.name} action={empty ? undefined : action} state={feedback?.state} /></span>
+          <span className="key-content"><KeyArtwork assetId={empty || feedback?.image ? undefined : key.iconPath} image={empty ? undefined : feedback?.image} text={empty ? "" : feedback?.title || key.text} alt={feedback?.title || key.name} action={empty ? undefined : action} state={feedback?.state} color={key.color} /></span>
           {!empty && <small>{key.name}</small>}
           {feedback?.disconnected && <span className="runtime-offline">offline</span>}
         </button>
@@ -289,7 +297,7 @@ function KeyEditor({ keyConfig, assets, hardwareReady, onImport, onApplyHardware
         <button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar editor"><X size={18} /></button>
       </div>
       <div className="key-preview" style={{ "--key-color": keyConfig.color } as React.CSSProperties}>
-        <KeyArtwork assetId={keyConfig.iconPath} text={keyConfig.text} alt={keyConfig.name} action={action} />
+        <KeyArtwork assetId={keyConfig.iconPath} text={keyConfig.text} alt={keyConfig.name} action={action} color={keyConfig.color} />
         <small>{keyConfig.name}</small>
       </div>
       <label>Nombre<input value={keyConfig.name} onChange={(e) => onChange({ ...keyConfig, name: e.target.value })} maxLength={40} /></label>
@@ -686,10 +694,12 @@ function IntegrationPanel({ state, selectedKey, voxoraCatalog, onRefresh, onRefr
 function DeviceSettingsPanel({
   state,
   onModeChange,
+  onAutoDetectChange,
   onRedetect,
 }: {
   state: BootstrapState;
   onModeChange: (mode: DeviceMode) => Promise<void>;
+  onAutoDetectChange: (enabled: boolean) => Promise<void>;
   onRedetect: () => Promise<void>;
 }) {
   const [listening, setListening] = useState(false);
@@ -730,6 +740,10 @@ function DeviceSettingsPanel({
           <button className={state.device.mode === "simulation" ? "active" : ""} onClick={() => void onModeChange("simulation")}>Simulación</button>
           <button className={state.device.mode === "hardware" ? "active" : ""} onClick={() => void onModeChange("hardware")}>Hardware</button>
         </div>
+        <label className="setting-toggle">
+          <input type="checkbox" checked={state.autoDetectDevice} onChange={(event) => void onAutoDetectChange(event.target.checked)} />
+          <span><strong>Detectar automáticamente</strong><small>Conecta, cambia a hardware y resincroniza al enchufar el DisplayPad.</small></span>
+        </label>
         <p className={state.device.connected ? "device-message ok" : "device-message error"}>
           {state.device.connected
             ? `${state.device.name} detectado${state.device.vendorId ? ` · VID 0x${state.device.vendorId.toString(16).padStart(4, "0")} / PID 0x${(state.device.productId ?? 0).toString(16).padStart(4, "0")}` : ""}`
@@ -776,11 +790,17 @@ function AboutPanel({ state, onOpenSettings }: { state: BootstrapState; onOpenSe
           <div><dt>Modo actual</dt><dd>{state.device.mode === "hardware" ? "Hardware" : "Simulación"}</dd></div>
           <div><dt>Actualizaciones</dt><dd>{state.updaterConfigured ? "GitHub Releases configurado" : "No configuradas"}</dd></div>
         </dl>
+        <div className="credits-grid">
+          <article><Sparkles size={18} /><div><strong>Diseño y desarrollo</strong><span>Proyecto NEXORA · Pizzha541</span></div></article>
+          <article><Cpu size={18} /><div><strong>Motor abierto</strong><span>Electron · React · TypeScript · Vite · Sharp</span></div></article>
+          <article><Gauge size={18} /><div><strong>Compatibilidad física</strong><span>Mountain DisplayPad mediante mountain-displaypad</span></div></article>
+          <article><ShieldCheck size={18} /><div><strong>Recursos y licencias</strong><span>Base Camp y sus imágenes pertenecen a sus respectivos titulares.</span></div></article>
+        </div>
         <div className="about-actions">
           <button type="button" className="primary-button" onClick={onOpenSettings}><Download size={16} /> Buscar actualizaciones</button>
           <a className="secondary-button" href="https://github.com/Pizzha541/Nexora" target="_blank" rel="noreferrer">Repositorio y versiones</a>
         </div>
-        <small>NEXORA no está afiliado con Elgato. Los plugins protegidos por DRM requieren autorización de sus proveedores.</small>
+        <small>NEXORA es un proyecto independiente, no afiliado con Mountain ni Elgato. Los plugins protegidos por DRM requieren autorización de sus proveedores. Los avisos de terceros se incluyen con la aplicación.</small>
       </div>
     </div>
   );
@@ -982,6 +1002,15 @@ function App() {
 
   useEffect(() => window.nexoraDesktop?.onEvent((value) => {
     if (!value || typeof value !== "object" || !("type" in value)) return;
+    if (value.type === "device-status" && "device" in value) {
+      const event = value as { device: BootstrapState["device"]; autoDetectDevice?: boolean };
+      setState((current) => current ? {
+        ...current,
+        device: event.device,
+        autoDetectDevice: event.autoDetectDevice ?? current.autoDetectDevice,
+      } : current);
+      return;
+    }
     if (value.type === "update-status" && "status" in value) {
       setUpdatePrompt(value.status as UpdateStatus);
       return;
@@ -1089,7 +1118,7 @@ function App() {
 
   const changeMode = async (mode: DeviceMode) => {
     const device = await setDeviceMode(mode);
-    setState((current) => current ? { ...current, device } : current);
+    setState((current) => current ? { ...current, device, autoDetectDevice: mode === "hardware" } : current);
   };
 
   const redetectDevice = async () => {
@@ -1326,7 +1355,7 @@ function App() {
       </div>}
       inspector={selectedConfig ? <KeyInspector
         keyConfig={selectedConfig}
-        assetPreview={selectedConfig.iconPath ? <AssetVisual assetId={selectedConfig.iconPath} alt={selectedConfig.name} /> : undefined}
+        assetPreview={<KeyArtwork assetId={selectedConfig.iconPath} text={selectedConfig.text} alt={selectedConfig.name} action={selectedConfig.actions[0]} color={selectedConfig.color} />}
         renderAsset={(assetId, alt) => <AssetVisual assetId={assetId} alt={alt} />}
         assets={state.assets}
         profiles={state.profiles}
@@ -1351,7 +1380,11 @@ function App() {
   ) : section === "profiles" ? (
     <div className="section-stack"><div className="section-title"><span><em>02</em> Perfiles</span><h1>Contextos que se adaptan</h1><p>Crea perfiles independientes y arrástralos para cambiar su orden.</p></div><div className="profile-actions"><button type="button" className="secondary-button" onClick={() => void duplicateActiveProfile()}><Copy size={16} /> Duplicar activo</button><button type="button" className="danger-button" disabled={state.profiles.length <= 1} onClick={() => void deleteActiveProfile()}><Trash2 size={16} /> Eliminar activo</button></div><div className="profile-grid">{state.profiles.map((profile) => <button type="button" draggable key={profile.id} className={`profile-card ${profile.id === activeProfile.id ? "active" : ""}`} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData(NEXORA_PROFILE_MIME, profile.id); }} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_PROFILE_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); const source = event.dataTransfer.getData(NEXORA_PROFILE_MIME); if (source) reorderProfileCards(source, profile.id); }} onClick={() => void selectProfile(profile)}><Layers3 /><div><h3>{profile.name}</h3><p>{profile.description}</p><small>{profile.keys.length} teclas · {profile.automaticApp || "Manual"}</small></div><ChevronRight /></button>)}<button type="button" className="profile-card new" onClick={() => void addProfile()}><Sparkles /><div><h3>Nuevo perfil</h3><p>Parte de una configuración limpia y segura.</p></div></button></div></div>
   ) : section === "settings" ? (
-    <DeviceSettingsPanel state={state} onModeChange={changeMode} onRedetect={redetectDevice} />
+    <DeviceSettingsPanel state={state} onModeChange={changeMode} onAutoDetectChange={async (enabled) => {
+      const autoDetectDevice = await setAutoDetectDevice(enabled);
+      const refreshed = enabled ? await getBootstrapState() : undefined;
+      setState((current) => refreshed || (current ? { ...current, autoDetectDevice } : current));
+    }} onRedetect={redetectDevice} />
   ) : section === "about" ? (
     <AboutPanel state={state} onOpenSettings={() => setSection("settings")} />
   ) : (

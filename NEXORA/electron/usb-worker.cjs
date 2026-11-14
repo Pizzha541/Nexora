@@ -12,6 +12,10 @@ let closing = false;
 let gifTimer = null;
 let gifBusy = false;
 const gifs = new Map();
+const lastPixels = new Map();
+const pressedKeys = new Set();
+const renderCache = new Map();
+const MAX_RENDER_CACHE = 128;
 
 function emit(message) { parentPort?.postMessage(message); }
 function reply(id, ok, extra = {}) { emit({ type: 'response', id, ok, ...extra }); }
@@ -37,10 +41,40 @@ function waitIdle(timeout = 25_000) {
   });
 }
 
-async function writePixels(index, pixels) {
+async function writePixels(index, pixels, remember = true) {
   if (!pad) throw new Error('DisplayPad desconectado.');
+  if (remember) lastPixels.set(index, pixels);
   pad.fillImage(index, pixels);
   await waitIdle();
+}
+
+function cacheFrame(key, pixels) {
+  if (renderCache.has(key)) renderCache.delete(key);
+  renderCache.set(key, pixels);
+  while (renderCache.size > MAX_RENDER_CACHE) renderCache.delete(renderCache.keys().next().value);
+  return pixels;
+}
+
+function pressedFrame(pixels) {
+  const result = Buffer.allocUnsafe(pixels.length);
+  for (let index = 0; index < pixels.length; index += 3) {
+    result[index] = Math.round(pixels[index] * 0.58);
+    result[index + 1] = Math.round(pixels[index + 1] * 0.54);
+    result[index + 2] = Math.min(255, Math.round(pixels[index + 2] * 0.72 + 18));
+  }
+  return result;
+}
+
+async function showPressed(key) {
+  const index = keyIndex(key);
+  const pixels = lastPixels.get(index);
+  if (pixels) await writePixels(index, pressedFrame(pixels), false);
+}
+
+async function restorePressed(key) {
+  const index = keyIndex(key);
+  const pixels = lastPixels.get(index);
+  if (pixels) await writePixels(index, pixels, false);
 }
 
 function stopGif(key) {
@@ -69,12 +103,20 @@ function textOverlay(text, withImage) {
 
 async function renderFrame(file, text, color, page) {
   const hasImage = Boolean(file);
+  const modified = hasImage && fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0;
+  const cacheKey = `${file || ''}|${modified}|${String(text || '')}|${String(color || '')}|${page ?? 'static'}`;
+  const cached = renderCache.get(cacheKey);
+  if (cached) {
+    renderCache.delete(cacheKey);
+    renderCache.set(cacheKey, cached);
+    return cached;
+  }
   let pipeline = hasImage
     ? sharp(file, page === undefined ? {} : { page, pages: 1 }).rotate().resize(102, 102, { fit: 'cover' })
     : sharp({ create: { width: 102, height: 102, channels: 3, background: /^#[0-9a-f]{6}$/i.test(color || '') ? color : '#111018' } });
   const overlay = textOverlay(text, hasImage);
   if (overlay) pipeline = pipeline.composite([{ input: overlay }]);
-  return pipeline.flatten({ background: '#000000' }).removeAlpha().raw().toBuffer();
+  return cacheFrame(cacheKey, await pipeline.flatten({ background: '#000000' }).removeAlpha().raw().toBuffer());
 }
 
 async function readGif(file, text, color) {
@@ -106,6 +148,11 @@ async function runGifFrame() {
     return;
   }
   const [key, gif] = entry;
+  if (pressedKeys.has(Number(key))) {
+    gif.nextAt = Date.now() + 50;
+    scheduleGif();
+    return;
+  }
   gifBusy = true;
   try {
     await writePixels(keyIndex(key), gif.frames[gif.frame].pixels);
@@ -166,6 +213,7 @@ async function applyPage(keys) {
     else if (key.file || key.text) await writeImage(index + 1, key.file, key.text, key.color);
     else {
       pad.clearKey(index);
+      lastPixels.delete(index);
       await waitIdle();
     }
     emit({ type: 'event', name: 'pageProgress', current: index + 1, total: 12 });
@@ -180,13 +228,23 @@ async function connect() {
   status('Buscando Mountain DisplayPad…');
   try {
     pad = await Displaypad.openAsync();
-    pad.on('down', (key) => emit({ type: 'event', name: 'buttonDown', key }));
-    pad.on('up', (key) => emit({ type: 'event', name: 'buttonUp', key }));
+    pad.on('down', (key) => {
+      pressedKeys.add(Number(key));
+      void showPressed(key).catch((error) => log('error', `Animación de pulsación ${key}: ${error.message}`));
+      emit({ type: 'event', name: 'buttonDown', key });
+    });
+    pad.on('up', (key) => {
+      pressedKeys.delete(Number(key));
+      void restorePressed(key).catch((error) => log('error', `Restauración de tecla ${key}: ${error.message}`));
+      emit({ type: 'event', name: 'buttonUp', key });
+    });
     pad.on('error', (error) => {
       log('error', `USB: ${error.message}`);
       ready = false;
       try { pad?.close(); } catch {}
       pad = null;
+      pressedKeys.clear();
+      lastPixels.clear();
       status(error.message);
     });
     ready = true;
@@ -208,6 +266,8 @@ async function handle(message) {
     if (command === 'shutdown') {
       closing = true;
       stopGifs();
+      pressedKeys.clear();
+      lastPixels.clear();
       try { pad?.close(); } catch {}
       pad = null;
       reply(id, true);
@@ -225,7 +285,7 @@ async function handle(message) {
     else if (command === 'stopGifs') stopGifs();
     else if (command === 'startupImage') { stopGifs(); await startup(payload.file, payload.fit); }
     else if (command === 'page') await applyPage(payload.keys || []);
-    else if (command === 'clear') { stopGif(payload.key); pad.clearKey(keyIndex(payload.key)); await waitIdle(); }
+    else if (command === 'clear') { stopGif(payload.key); const index = keyIndex(payload.key); lastPixels.delete(index); pad.clearKey(index); await waitIdle(); }
     else throw new Error(`Comando desconocido: ${command}`);
     if (command !== 'gifStart') reply(id, true);
   } catch (error) {

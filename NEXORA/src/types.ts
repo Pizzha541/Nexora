@@ -207,6 +207,7 @@ export type UpdateStatus = {
 export type BootstrapState = {
   version: string;
   onboardingCompleted: boolean;
+  autoDetectDevice: boolean;
   activeProfileId: string;
   profiles: Profile[];
   macros: MacroDefinition[];

@@ -30,11 +30,14 @@ const multiSwitchStates = new Map();
 let keySyncTimer = null;
 let usbSequence = Promise.resolve();
 let reconnectTimer = null;
+let workerRestartTimer = null;
 let initialRestoreTimer = null;
 let screensaverTimer = null;
 let screensaverActive = false;
 let shuttingDown = false;
 let backgroundNoticeShown = false;
+let assetFilesValidated = false;
+let presetAssetsEnsured = false;
 
 const windowsLocalData = process.platform === 'win32'
   ? path.resolve(app.getPath('appData'), '..', 'Local')
@@ -256,6 +259,7 @@ function importVisualFiles(files, currentAssets, source = 'basecamp', sourceRoot
 }
 
 function ensureNexoraPresetAssets(currentAssets) {
+  if (presetAssetsEnsured) return currentAssets;
   const roots = [
     path.join(app.getAppPath(), 'dist', 'assets', 'presets'),
     path.join(app.getAppPath(), 'public', 'assets', 'presets'),
@@ -277,6 +281,7 @@ function ensureNexoraPresetAssets(currentAssets) {
     else if (JSON.stringify(assets[index]) !== JSON.stringify(entry)) { assets[index] = entry; changed = true; }
   }
   if (changed) writeJson(path.join(dataRoot, 'assets', 'index.json'), assets);
+  presetAssetsEnsured = true;
   return assets;
 }
 
@@ -292,6 +297,7 @@ function loadRepository() {
   const settings = readJson(settingsFile, {
     activeProfileId: profiles[0].id,
     deviceMode: 'simulation',
+    autoDetectDevice: true,
     githubOwner: '',
     githubRepository: '',
     updaterPublicKey: '',
@@ -301,6 +307,10 @@ function loadRepository() {
   let settingsChanged = !settingsExisted;
   if (settings.onboardingCompleted === undefined) {
     settings.onboardingCompleted = settingsExisted;
+    settingsChanged = true;
+  }
+  if (settings.autoDetectDevice === undefined) {
+    settings.autoDetectDevice = true;
     settingsChanged = true;
   }
   if (!settings.visualSettings) settingsChanged = true;
@@ -313,8 +323,13 @@ function loadRepository() {
     settings.activeProfileId = profiles[0].id;
     settingsChanged = true;
   }
-  let assets = readJson(path.join(dataRoot, 'assets', 'index.json'), [])
-    .filter((asset) => fs.existsSync(path.join(dataRoot, 'assets', asset.fileName)));
+  let assets = readJson(path.join(dataRoot, 'assets', 'index.json'), []);
+  if (!assetFilesValidated) {
+    const before = assets.length;
+    assets = assets.filter((asset) => fs.existsSync(path.join(dataRoot, 'assets', asset.fileName)));
+    if (assets.length !== before) writeJson(path.join(dataRoot, 'assets', 'index.json'), assets);
+    assetFilesValidated = true;
+  }
   assets = ensureNexoraPresetAssets(assets);
   if (!settings.nexoraPresetKeysMigrated) {
     for (const profile of profiles) {
@@ -409,21 +424,37 @@ async function applyPluginFeedback(value) {
 }
 
 function startWorker() {
-  worker = utilityProcess.fork(path.join(__dirname, 'usb-worker.cjs'), [], {
+  if (worker?.pid || shuttingDown) return;
+  const service = utilityProcess.fork(path.join(__dirname, 'usb-worker.cjs'), [], {
     serviceName: 'NEXORA USB Service',
     stdio: 'pipe',
   });
-  worker.on('message', handleWorkerMessage);
-  worker.stderr?.setEncoding('utf8');
-  worker.stderr?.on('data', (value) => sendEvent({ type: 'log', level: 'error', message: String(value).trim() }));
-  worker.on('exit', (code) => {
+  worker = service;
+  const repository = loadRepository();
+  const profile = repository.profiles.find((item) => item.id === repository.settings.activeProfileId) || repository.profiles[0];
+  if (!activeKeys && profile) activeKeys = structuredClone(profile.keys);
+  service.on('message', handleWorkerMessage);
+  service.stderr?.setEncoding('utf8');
+  service.stderr?.on('data', (value) => sendEvent({ type: 'log', level: 'error', message: String(value).trim() }));
+  service.on('exit', (code) => {
     appendLog('usb-worker-exit', code);
+    if (worker === service) worker = null;
     workerConnected = false;
     for (const resolve of pending.values()) resolve({ ok: false, error: `Servicio USB detenido (${code}).` });
     pending.clear();
     sendEvent({ type: 'status', connected: false, message: 'Servicio USB detenido.' });
+    scheduleWorkerRestart();
   });
-  worker.on('error', (error) => appendLog('usb-worker-error', error?.report || JSON.stringify(error)));
+  service.on('error', (error) => appendLog('usb-worker-error', error?.report || JSON.stringify(error)));
+}
+
+function scheduleWorkerRestart() {
+  if (workerRestartTimer || shuttingDown) return;
+  workerRestartTimer = setTimeout(() => {
+    workerRestartTimer = null;
+    startWorker();
+  }, 1500);
+  workerRestartTimer.unref();
 }
 
 function handleWorkerMessage(message) {
@@ -435,8 +466,27 @@ function handleWorkerMessage(message) {
   if (message.type === 'status') {
     const wasConnected = workerConnected;
     workerConnected = Boolean(message.connected && message.ready !== false);
-    if (!wasConnected && workerConnected) void syncInitialOrPage();
+    let repository;
+    try { repository = loadRepository(); } catch {}
+    if (workerConnected && repository?.settings.autoDetectDevice && repository.settings.deviceMode !== 'hardware') {
+      repository.settings.deviceMode = 'hardware';
+      saveSettings(repository.settings);
+    }
+    if (workerConnected && reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (!wasConnected && workerConnected) void syncInitialOrPage(repository);
     if (!workerConnected) scheduleReconnect();
+    sendEvent({
+      type: 'device-status',
+      device: workerConnected
+        ? { connected: true, mode: 'hardware', name: 'Mountain DisplayPad', vendorId: 0x3282, productId: 0x0009 }
+        : repository?.settings.deviceMode === 'simulation' && !repository.settings.autoDetectDevice
+          ? { connected: true, mode: 'simulation', name: 'DisplayPad simulado' }
+          : { connected: false, mode: 'hardware', name: 'Mountain DisplayPad', vendorId: 0x3282, productId: 0x0009, lastError: message.message || 'Buscando DisplayPad…' },
+      autoDetectDevice: repository?.settings.autoDetectDevice !== false,
+    });
   }
   if (message.type === 'event' && (message.name === 'buttonDown' || message.name === 'buttonUp')) {
     const event = { key: message.key, pressed: message.name === 'buttonDown', timestampMs: Date.now(), rawOffset42: 0, rawOffset47: 0 };
@@ -465,7 +515,7 @@ function scheduleReconnect() {
   if (reconnectTimer || shuttingDown) return;
   let repository;
   try { repository = loadRepository(); } catch { return; }
-  if (repository.settings.deviceMode !== 'hardware') return;
+  if (repository.settings.deviceMode !== 'hardware' && !repository.settings.autoDetectDevice) return;
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
     const result = await serialWorkerRequest('connect');
@@ -847,6 +897,10 @@ async function runKeyAction(keyNumber) {
 async function invoke(command, args) {
   const repository = loadRepository();
   if (command === 'get_bootstrap_state') {
+    if (workerConnected && repository.settings.autoDetectDevice && repository.settings.deviceMode !== 'hardware') {
+      repository.settings.deviceMode = 'hardware';
+      saveSettings(repository.settings);
+    }
     const mode = repository.settings.deviceMode || 'simulation';
     const voxora = await voxoraService.summary();
     return {
@@ -854,6 +908,7 @@ async function invoke(command, args) {
       profiles: repository.profiles, macros: repository.macros, assets: repository.assets,
       plugins: pluginService?.list() || [], pluginCatalog: pluginService?.catalog() || [],
       onboardingCompleted: Boolean(repository.settings.onboardingCompleted),
+      autoDetectDevice: repository.settings.autoDetectDevice !== false,
       visualSettings: repository.settings.visualSettings, startupWarning: undefined,
       device: mode === 'simulation'
         ? { connected: true, mode, name: 'DisplayPad simulado' }
@@ -911,6 +966,7 @@ async function invoke(command, args) {
   }
   if (command === 'set_device_mode') {
     repository.settings.deviceMode = args.mode;
+    repository.settings.autoDetectDevice = args.mode === 'hardware';
     saveSettings(repository.settings);
     if (args.mode === 'simulation') {
       if (initialRestoreTimer) clearTimeout(initialRestoreTimer);
@@ -926,6 +982,19 @@ async function invoke(command, args) {
     return args.mode === 'simulation'
       ? { connected: true, mode: 'simulation', name: 'DisplayPad simulado' }
       : { connected: workerConnected, mode: 'hardware', name: 'Mountain DisplayPad', vendorId: 0x3282, productId: 0x0009 };
+  }
+  if (command === 'set_auto_detect_device') {
+    repository.settings.autoDetectDevice = Boolean(args.enabled);
+    saveSettings(repository.settings);
+    if (repository.settings.autoDetectDevice) {
+      const result = await serialWorkerRequest('connect');
+      if (result.ok || workerConnected) {
+        repository.settings.deviceMode = 'hardware';
+        saveSettings(repository.settings);
+        await syncInitialOrPage(repository);
+      }
+    }
+    return repository.settings.autoDetectDevice;
   }
   if (command === 'refresh_device_status') {
     const result = await serialWorkerRequest('connect');
@@ -1273,5 +1342,5 @@ app.on('second-instance', () => {
   showMainWindow();
 });
 app.on('activate', showMainWindow);
-app.on('before-quit', () => { shuttingDown = true; if (reconnectTimer) clearTimeout(reconnectTimer); for (const timer of longPressTimers.values()) clearTimeout(timer); longPressTimers.clear(); multiSwitchStates.clear(); for (const inspector of propertyInspectorWindows.values()) inspector.destroy(); propertyInspectorWindows.clear(); pluginService?.stopAll(); obsService?.disconnect(); voxoraService?.stop(); if (worker?.pid) { void workerRequest('shutdown', {}, 1000); setTimeout(() => worker?.kill(), 1100).unref(); } });
+app.on('before-quit', () => { shuttingDown = true; if (reconnectTimer) clearTimeout(reconnectTimer); if (workerRestartTimer) clearTimeout(workerRestartTimer); for (const timer of longPressTimers.values()) clearTimeout(timer); longPressTimers.clear(); multiSwitchStates.clear(); for (const inspector of propertyInspectorWindows.values()) inspector.destroy(); propertyInspectorWindows.clear(); pluginService?.stopAll(); obsService?.disconnect(); voxoraService?.stop(); if (worker?.pid) { void workerRequest('shutdown', {}, 1000); setTimeout(() => worker?.kill(), 1100).unref(); } });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' && (shuttingDown || !tray)) app.quit(); });
