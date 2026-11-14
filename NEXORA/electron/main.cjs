@@ -339,6 +339,16 @@ function loadRepository() {
       const result = importVisualFiles(collectVisualFiles(baseCampRoot), assets, 'basecamp', baseCampRoot);
       assets = result.assets;
       settings.baseCampAssetsImportedFrom = baseCampRoot;
+      settings.baseCampCategoriesMigrated = 1;
+      settingsChanged = true;
+    }
+  }
+  if (!settings.baseCampCategoriesMigrated) {
+    const baseCampRoot = detectedBaseCampImageRoot();
+    if (baseCampRoot) {
+      const result = importVisualFiles(collectVisualFiles(baseCampRoot), assets, 'basecamp', baseCampRoot);
+      assets = result.assets;
+      settings.baseCampCategoriesMigrated = 1;
       settingsChanged = true;
     }
   }
