@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, net, shell, utilityProcess } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, shell, Tray, utilityProcess } = require('electron');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -11,6 +11,7 @@ const { VoxoraService } = require('./voxora-service.cjs');
 const { createUpdateService } = require('./update-service.cjs');
 
 let window = null;
+let tray = null;
 let worker = null;
 let workerConnected = false;
 let requestId = 0;
@@ -33,6 +34,7 @@ let initialRestoreTimer = null;
 let screensaverTimer = null;
 let screensaverActive = false;
 let shuttingDown = false;
+let backgroundNoticeShown = false;
 
 const windowsLocalData = process.platform === 'win32'
   ? path.resolve(app.getPath('appData'), '..', 'Local')
@@ -46,6 +48,7 @@ const captureUiArgument = process.argv.find((argument) => argument.startsWith('-
 const captureUiPath = captureUiArgument ? path.resolve(captureUiArgument.slice('--capture-ui='.length)) : null;
 const captureSectionArgument = process.argv.find((argument) => argument.startsWith('--capture-section='));
 const captureSection = captureSectionArgument ? captureSectionArgument.slice('--capture-section='.length) : null;
+const captureOnboarding = process.argv.includes('--capture-onboarding');
 const isolatedTestRun = smokeTest || rendererSmokeTest || uiSmokeTest || Boolean(captureUiPath);
 const instanceLock = isolatedTestRun || app.requestSingleInstanceLock();
 if (!instanceLock) app.quit();
@@ -190,6 +193,7 @@ function detectedBaseCampImageRoot() {
     if (match) candidates.push(match[1].trim());
   }
   candidates.push(
+    path.join(process.resourcesPath, 'basecamp-assets'),
     path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Mountain Base Camp'),
     path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Mountain Base Camp'),
     path.resolve(app.getAppPath(), '..', 'USER_FILES', 'device', 'basecamp app original', 'Mountain Base Camp'),
@@ -217,25 +221,37 @@ function collectVisualFiles(root, limit = 2500) {
   return files;
 }
 
-function importVisualFiles(files, currentAssets, source = 'basecamp') {
+function importVisualFiles(files, currentAssets, source = 'basecamp', sourceRoot = null) {
   const assets = [...currentAssets];
   let imported = 0;
+  let changed = false;
   for (const file of files) {
     const stat = fs.statSync(file);
     if (!stat.size || stat.size > 12 * 1024 * 1024) continue;
     const bytes = fs.readFileSync(file);
     const id = crypto.createHash('sha256').update(bytes).digest('hex');
-    if (assets.some((asset) => asset.id === id)) continue;
+    const relativeDirectory = source === 'basecamp' && sourceRoot
+      ? path.relative(sourceRoot, path.dirname(file)).split(path.sep).filter(Boolean)[0]
+      : undefined;
+    const existingIndex = assets.findIndex((asset) => asset.id === id);
+    if (existingIndex >= 0) {
+      if (relativeDirectory && !assets[existingIndex].category) {
+        assets[existingIndex] = { ...assets[existingIndex], category: relativeDirectory };
+        changed = true;
+      }
+      continue;
+    }
     const extension = path.extname(file).toLowerCase();
     const fileName = `${id}${extension === '.jpeg' ? '.jpg' : extension}`;
     fs.copyFileSync(file, path.join(dataRoot, 'assets', fileName));
     assets.push({
       id, name: path.basename(file), mimeType: visualExtensions.get(extension), fileName,
-      sizeBytes: stat.size, animated: extension === '.gif', importedAt: new Date().toISOString(), source,
+      sizeBytes: stat.size, animated: extension === '.gif', importedAt: new Date().toISOString(), source, category: relativeDirectory,
     });
     imported += 1;
+    changed = true;
   }
-  if (imported) writeJson(path.join(dataRoot, 'assets', 'index.json'), assets);
+  if (changed) writeJson(path.join(dataRoot, 'assets', 'index.json'), assets);
   return { assets, imported };
 }
 
@@ -279,9 +295,14 @@ function loadRepository() {
     githubOwner: '',
     githubRepository: '',
     updaterPublicKey: '',
+    onboardingCompleted: false,
     visualSettings: defaultVisualSettings(),
   });
   let settingsChanged = !settingsExisted;
+  if (settings.onboardingCompleted === undefined) {
+    settings.onboardingCompleted = settingsExisted;
+    settingsChanged = true;
+  }
   if (!settings.visualSettings) settingsChanged = true;
   settings.visualSettings = { ...defaultVisualSettings(), ...(settings.visualSettings || {}) };
   if (Array.isArray(settings.profileOrder)) {
@@ -315,7 +336,7 @@ function loadRepository() {
   if (!settings.baseCampAssetsImportedFrom) {
     const baseCampRoot = detectedBaseCampImageRoot();
     if (baseCampRoot) {
-      const result = importVisualFiles(collectVisualFiles(baseCampRoot), assets);
+      const result = importVisualFiles(collectVisualFiles(baseCampRoot), assets, 'basecamp', baseCampRoot);
       assets = result.assets;
       settings.baseCampAssetsImportedFrom = baseCampRoot;
       settingsChanged = true;
@@ -551,7 +572,7 @@ async function syncInitialOrPage(repository = loadRepository()) {
   screensaverActive = false;
   const visual = repository.settings.visualSettings;
   if (!workerConnected || repository.settings.deviceMode !== 'hardware' || !visual.initialScreenEnabled) return syncDesiredPage(repository);
-  const file = visual.initialAssetId ? assetPath(visual.initialAssetId, repository) : builtinBannerPath();
+  const file = visual.initialAssetId ? assetPath(visual.initialAssetId, repository) : builtinInitialScreenPath();
   const result = await serialWorkerRequest('startupImage', { file, fit: visual.fit });
   if (!result.ok) return result;
   initialRestoreTimer = setTimeout(() => { initialRestoreTimer = null; void syncDesiredPage(); }, Math.max(1, Number(visual.initialDurationSeconds || 5)) * 1000);
@@ -570,6 +591,21 @@ function builtinBannerPath() {
   const target = path.join(dataRoot, 'assets', 'builtin-nexora-banner.png');
   if (!fs.existsSync(target)) {
     fs.copyFileSync(path.join(app.getAppPath(), 'dist', 'assets', 'noxorabanner.png'), target);
+  }
+  return target;
+}
+
+function builtinInitialScreenPath() {
+  const target = path.join(dataRoot, 'assets', 'builtin-nexora-initial-screen.png');
+  if (!fs.existsSync(target)) {
+    const candidates = [
+      path.join(process.resourcesPath, 'branding', 'initial_screen.png'),
+      path.resolve(app.getAppPath(), '..', 'USER_FILES', 'branding', 'initial_screen.png'),
+      path.join(app.getAppPath(), 'dist', 'assets', 'noxorabanner.png'),
+    ];
+    const source = candidates.find((candidate) => fs.existsSync(candidate));
+    if (!source) throw new Error('No se encontró el Initial Screen incluido.');
+    fs.copyFileSync(source, target);
   }
   return target;
 }
@@ -807,6 +843,7 @@ async function invoke(command, args) {
       version: app.getVersion(), activeProfileId: repository.settings.activeProfileId,
       profiles: repository.profiles, macros: repository.macros, assets: repository.assets,
       plugins: pluginService?.list() || [], pluginCatalog: pluginService?.catalog() || [],
+      onboardingCompleted: Boolean(repository.settings.onboardingCompleted),
       visualSettings: repository.settings.visualSettings, startupWarning: undefined,
       device: mode === 'simulation'
         ? { connected: true, mode, name: 'DisplayPad simulado' }
@@ -819,6 +856,11 @@ async function invoke(command, args) {
       ],
       updaterConfigured: true,
     };
+  }
+  if (command === 'set_onboarding_completed') {
+    repository.settings.onboardingCompleted = Boolean(args.completed);
+    saveSettings(repository.settings);
+    return repository.settings.onboardingCompleted;
   }
   if (command === 'save_profile') return saveProfile(structuredClone(args.profile));
   if (command === 'create_profile') return saveProfile(createProfile(args.name));
@@ -925,7 +967,7 @@ async function invoke(command, args) {
     if (!root) throw new Error('La carpeta seleccionada no contiene recursos de Base Camp.');
     const files = collectVisualFiles(root);
     if (!files.length) throw new Error('La carpeta seleccionada no contiene imágenes compatibles.');
-    const result = importVisualFiles(files, repository.assets);
+    const result = importVisualFiles(files, repository.assets, 'basecamp', root);
     repository.settings.baseCampAssetsImportedFrom = root;
     saveSettings(repository.settings);
     return { imported: result.imported, total: result.assets.filter((asset) => asset.source === 'basecamp').length, source: root };
@@ -955,6 +997,9 @@ async function invoke(command, args) {
     const asset = repository.assets.find((item) => item.id === args.assetId);
     if (!asset) throw new Error('Recurso no encontrado.');
     return `data:${asset.mimeType};base64,${fs.readFileSync(path.join(dataRoot, 'assets', asset.fileName)).toString('base64')}`;
+  }
+  if (command === 'read_builtin_initial_screen') {
+    return `data:image/png;base64,${fs.readFileSync(builtinInitialScreenPath()).toString('base64')}`;
   }
   if (command === 'save_visual_settings') {
     repository.settings.visualSettings = structuredClone(args.visualSettings);
@@ -1043,7 +1088,7 @@ async function invoke(command, args) {
   }
   if (command === 'hardware_apply_initial') {
     const assetId = repository.settings.visualSettings.initialAssetId;
-    const file = assetId ? assetPath(assetId, repository) : builtinBannerPath();
+    const file = assetId ? assetPath(assetId, repository) : builtinInitialScreenPath();
     if (screensaverTimer) clearTimeout(screensaverTimer);
     screensaverTimer = null;
     screensaverActive = false;
@@ -1062,6 +1107,47 @@ async function invoke(command, args) {
   throw new Error(`Comando no implementado en Electron: ${command}`);
 }
 
+function showMainWindow() {
+  if (!window || window.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
+function createTray() {
+  if (tray || isolatedTestRun) return;
+  const candidates = [
+    path.join(app.getAppPath(), 'dist', 'assets', 'noxoralogo.png'),
+    path.join(app.getAppPath(), 'public', 'assets', 'noxoralogo.png'),
+  ];
+  const source = candidates.find((candidate) => fs.existsSync(candidate));
+  const image = source ? nativeImage.createFromPath(source).resize({ width: 16, height: 16 }) : nativeImage.createEmpty();
+  tray = new Tray(image);
+  tray.setToolTip('NEXORA · DisplayPad activo');
+  const rebuildMenu = () => {
+    const openAtLogin = app.getLoginItemSettings().openAtLogin;
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Abrir NEXORA', click: showMainWindow },
+      { label: 'DisplayPad activo en segundo plano', enabled: false },
+      { type: 'separator' },
+      {
+        label: 'Iniciar con Windows', type: 'checkbox', checked: openAtLogin,
+        click: (item) => {
+          app.setLoginItemSettings({ openAtLogin: item.checked, path: process.execPath });
+          rebuildMenu();
+        },
+      },
+      { type: 'separator' },
+      { label: 'Salir completamente', click: () => { shuttingDown = true; app.quit(); } },
+    ]));
+  };
+  rebuildMenu();
+  tray.on('double-click', showMainWindow);
+}
+
 function createWindow(showWhenReady = true) {
   rendererReady = false;
   window = new BrowserWindow({
@@ -1070,8 +1156,22 @@ function createWindow(showWhenReady = true) {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   window.removeMenu();
-  window.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'), captureUiPath ? { query: { capture: '1', ...(captureSection ? { section: captureSection } : {}) } } : undefined);
+  window.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'), captureUiPath ? { query: { capture: '1', ...(captureSection ? { section: captureSection } : {}), ...(captureOnboarding ? { onboarding: '1' } : {}) } } : undefined);
   if (showWhenReady) window.once('ready-to-show', () => window.show());
+  window.on('close', (event) => {
+    if (shuttingDown || isolatedTestRun) return;
+    event.preventDefault();
+    window.hide();
+    if (!backgroundNoticeShown && tray) {
+      backgroundNoticeShown = true;
+      tray.displayBalloon({
+        title: 'NEXORA sigue activa',
+        content: 'El DisplayPad continúa funcionando. Usa el icono de la bandeja para volver o salir completamente.',
+        noSound: true,
+      });
+    }
+  });
+  window.on('closed', () => { window = null; });
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
     return { action: 'deny' };
@@ -1151,6 +1251,7 @@ app.whenReady().then(() => {
     setTimeout(() => app.exit(rendererReady ? 0 : 2), 15_000).unref();
     return;
   }
+  createTray();
   createWindow();
   if (!uiSmokeTest && !captureUiPath) startWorker();
   if (app.isPackaged && !uiSmokeTest && !captureUiPath) {
@@ -1159,7 +1260,8 @@ app.whenReady().then(() => {
 });
 
 app.on('second-instance', () => {
-  if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
+  showMainWindow();
 });
+app.on('activate', showMainWindow);
 app.on('before-quit', () => { shuttingDown = true; if (reconnectTimer) clearTimeout(reconnectTimer); for (const timer of longPressTimers.values()) clearTimeout(timer); longPressTimers.clear(); multiSwitchStates.clear(); for (const inspector of propertyInspectorWindows.values()) inspector.destroy(); propertyInspectorWindows.clear(); pluginService?.stopAll(); obsService?.disconnect(); voxoraService?.stop(); if (worker?.pid) { void workerRequest('shutdown', {}, 1000); setTimeout(() => worker?.kill(), 1100).unref(); } });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => { if (process.platform !== 'darwin' && (shuttingDown || !tray)) app.quit(); });

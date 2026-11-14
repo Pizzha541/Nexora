@@ -1,0 +1,101 @@
+/* ===== NEXORA · Recorrido guiado ===== */
+.gt-root { position: fixed; inset: 0; z-index: 1000; font-family: Inter, "Segoe UI", system-ui, sans-serif; color: #f8f7fb; }
+.gt-blocker { position: absolute; inset: 0; background: transparent; cursor: default; }
+.gt-dim { position: absolute; inset: 0; background: rgba(5, 3, 12, .78); backdrop-filter: blur(3px); animation: gt-fade .35s ease both; }
+
+/* Foco sobre el elemento: el recuadro se desliza entre pasos */
+.gt-spot {
+  position: absolute; border-radius: 16px; pointer-events: none;
+  border: 2px solid rgba(167, 139, 250, .95);
+  box-shadow: 0 0 0 9999px rgba(5, 3, 12, .78), 0 0 36px 4px rgba(139, 92, 246, .55), inset 0 0 22px rgba(139, 92, 246, .22);
+  animation: gt-fade .35s ease both;
+}
+.gt-spot.is-ready { transition: left .5s cubic-bezier(.22, 1, .36, 1), top .5s cubic-bezier(.22, 1, .36, 1), width .5s cubic-bezier(.22, 1, .36, 1), height .5s cubic-bezier(.22, 1, .36, 1); }
+.gt-spot i { position: absolute; inset: -2px; border-radius: inherit; border: 2px solid rgba(196, 181, 253, .7); animation: gt-pulse 1.9s ease-out infinite; }
+
+/* Tarjeta */
+.gt-card {
+  position: absolute; width: 410px; max-width: calc(100vw - 32px); padding: 20px 22px 18px; border-radius: 18px; overflow: hidden;
+  background: linear-gradient(160deg, rgba(31, 26, 46, .98), rgba(14, 12, 21, .98) 60%);
+  border: 1px solid rgba(167, 139, 250, .28);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .6), 0 0 60px rgba(109, 40, 217, .22), inset 0 1px rgba(255, 255, 255, .06);
+  animation: gt-card-in .5s cubic-bezier(.2, .9, .25, 1.1) both;
+}
+.gt-card::before { content: ""; position: absolute; width: 240px; height: 240px; right: -90px; top: -130px; border-radius: 50%; background: #7c3aed; filter: blur(80px); opacity: .22; pointer-events: none; }
+.gt-card > * { position: relative; }
+.gt-card.kind-welcome, .gt-card.kind-finish { width: 470px; }
+.gt-card.kind-welcome, .gt-card.kind-finish { padding-top: 0; }
+
+.gt-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.kind-welcome .gt-head, .kind-finish .gt-head { margin-top: 16px; }
+.gt-badge { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; color: #c4b5fd; background: rgba(124, 58, 237, .2); border: 1px solid rgba(167, 139, 250, .3); animation: gt-float 3s ease-in-out infinite; }
+.gt-eyebrow { color: #9b7eea; font-size: 9px; letter-spacing: .19em; font-weight: 700; margin-right: auto; }
+.gt-lang { display: flex; padding: 2px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, .09); background: rgba(0, 0, 0, .28); }
+.gt-lang button { border: 0; background: transparent; color: #7d7788; font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 4px 8px; border-radius: 6px; cursor: pointer; transition: .2s; }
+.gt-lang button:hover { color: #fff; }
+.gt-lang button.active { color: #fff; background: #4c2c92; box-shadow: 0 0 12px rgba(124, 58, 237, .45); }
+.gt-close { width: 28px; height: 28px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, .08); background: rgba(255, 255, 255, .03); color: #8f8997; display: grid; place-items: center; cursor: pointer; transition: .2s; }
+.gt-close:hover { color: #fff; background: rgba(255, 255, 255, .08); }
+
+.gt-card h2 { margin: 0 0 8px; font: 800 21px/1.2 Manrope, "Segoe UI", sans-serif; letter-spacing: -.02em; animation: gt-up .45s .08s cubic-bezier(.2, .9, .25, 1) both; }
+.gt-card p { margin: 0; color: #b4aebf; font-size: 13px; line-height: 1.65; animation: gt-up .45s .16s cubic-bezier(.2, .9, .25, 1) both; }
+.gt-tip { display: flex; gap: 9px; align-items: flex-start; margin-top: 13px; padding: 10px 12px; border-radius: 10px; background: rgba(124, 58, 237, .1); border: 1px solid rgba(167, 139, 250, .18); color: #cfc6e6; font-size: 11.5px; line-height: 1.55; animation: gt-up .45s .24s cubic-bezier(.2, .9, .25, 1) both; }
+.gt-tip svg { flex: 0 0 auto; color: #fbbf24; margin-top: 2px; }
+.gt-tip strong { color: #e9e2ff; }
+
+.gt-progress { height: 3px; border-radius: 3px; background: rgba(255, 255, 255, .07); margin: 18px 0 11px; overflow: hidden; }
+.gt-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7c3aed, #c4b5fd); box-shadow: 0 0 12px rgba(167, 139, 250, .7); animation: gt-grow .6s cubic-bezier(.22, 1, .36, 1) both; transform-origin: left; }
+.gt-dots { display: flex; gap: 6px; justify-content: center; margin-bottom: 14px; }
+.gt-dots button { width: 7px; height: 7px; padding: 0; border: 0; border-radius: 99px; background: rgba(255, 255, 255, .14); cursor: pointer; transition: width .3s, background .3s; }
+.gt-dots button:hover { background: rgba(255, 255, 255, .3); }
+.gt-dots button.done { background: rgba(167, 139, 250, .55); }
+.gt-dots button.active { width: 20px; background: #a78bfa; box-shadow: 0 0 10px rgba(167, 139, 250, .7); }
+
+.gt-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.gt-actions { display: flex; gap: 8px; margin-left: auto; }
+.gt-skip { border: 0; background: transparent; color: #7d7788; font-size: 11px; cursor: pointer; padding: 8px 2px; transition: color .2s; }
+.gt-skip:hover { color: #d8d2e4; text-decoration: underline; }
+.gt-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 10px 15px; border-radius: 9px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid rgba(255, 255, 255, .1); transition: transform .15s, box-shadow .2s, background .2s; }
+.gt-btn:active { transform: scale(.96); }
+.gt-btn.ghost { background: rgba(255, 255, 255, .04); color: #d8d2e4; }
+.gt-btn.ghost:hover { background: rgba(255, 255, 255, .09); }
+.gt-btn.primary { color: #fff; border-color: rgba(167, 139, 250, .4); background: linear-gradient(135deg, #7c3aed, #5b21b6); box-shadow: 0 8px 26px rgba(91, 33, 182, .4); }
+.gt-btn.primary:hover { box-shadow: 0 10px 32px rgba(124, 58, 237, .6); transform: translateY(-1px); }
+.gt-btn:focus-visible, .gt-lang button:focus-visible, .gt-close:focus-visible, .gt-dots button:focus-visible, .gt-skip:focus-visible { outline: 2px solid #c4b5fd; outline-offset: 2px; }
+
+/* Bienvenida: banner con zoom lento y brillo */
+.gt-banner { position: relative; margin: 0 -22px; height: 168px; overflow: hidden; border-bottom: 1px solid rgba(167, 139, 250, .22); }
+.gt-banner img { width: 100%; height: 100%; object-fit: cover; object-position: center 45%; animation: gt-kenburns 14s ease-in-out infinite alternate; }
+.gt-banner::after { content: ""; position: absolute; inset: auto 0 0 0; height: 60px; background: linear-gradient(transparent, rgba(14, 12, 21, .95)); }
+.gt-shine { position: absolute; inset: 0; z-index: 1; background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, .13) 50%, transparent 65%); transform: translateX(-120%); animation: gt-sweep 3.4s .6s ease-in-out infinite; }
+
+/* Final: logo en órbita, bandeja y destellos */
+.gt-finish-art { position: relative; margin: 0 -22px; height: 150px; display: grid; place-items: center; overflow: hidden; border-bottom: 1px solid rgba(167, 139, 250, .22); background: radial-gradient(circle at 50% 55%, rgba(124, 58, 237, .28), transparent 65%); }
+.gt-orbit { position: relative; width: 88px; height: 88px; display: grid; place-items: center; }
+.gt-orbit::before, .gt-orbit::after { content: ""; position: absolute; border-radius: 50%; border: 1px solid rgba(167, 139, 250, .35); }
+.gt-orbit::before { inset: -8px; animation: gt-spin 9s linear infinite; border-top-color: #c4b5fd; }
+.gt-orbit::after { inset: -22px; border-style: dashed; opacity: .5; animation: gt-spin 16s linear infinite reverse; }
+.gt-orbit img { width: 64px; height: 60px; object-fit: contain; filter: drop-shadow(0 6px 22px rgba(139, 92, 246, .7)); animation: gt-float 3s ease-in-out infinite; }
+.gt-tray { position: absolute; right: 16px; bottom: 12px; display: flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 9px; font-size: 10px; font-weight: 700; letter-spacing: .1em; background: rgba(17, 15, 26, .92); border: 1px solid rgba(167, 139, 250, .3); animation: gt-up .6s .35s cubic-bezier(.2, .9, .25, 1) both; }
+.gt-tray img { width: 15px; height: 15px; object-fit: contain; }
+.gt-tray i { width: 6px; height: 6px; border-radius: 50%; background: #34d399; box-shadow: 0 0 9px #34d399; animation: gt-blink 1.6s ease-in-out infinite; }
+.gt-finish-art b { position: absolute; left: calc(8% + var(--i) * 6.4%); bottom: -8px; width: 5px; height: 5px; border-radius: 50%; background: #c4b5fd; opacity: 0; animation: gt-rise 3s calc(var(--i) * .17s) ease-out infinite; }
+.gt-finish-art b:nth-child(3n) { background: #7c3aed; width: 4px; height: 4px; }
+.gt-finish-art b:nth-child(4n) { background: #34d399; }
+
+@keyframes gt-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes gt-card-in { from { opacity: 0; transform: translateY(16px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes gt-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes gt-grow { from { transform: scaleX(.3); } to { transform: scaleX(1); } }
+@keyframes gt-pulse { 0% { opacity: .9; transform: scale(1); } 100% { opacity: 0; transform: scale(1.12); } }
+@keyframes gt-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes gt-kenburns { from { transform: scale(1); } to { transform: scale(1.09); } }
+@keyframes gt-sweep { 0%, 55% { transform: translateX(-120%); } 100% { transform: translateX(120%); } }
+@keyframes gt-spin { to { transform: rotate(360deg); } }
+@keyframes gt-blink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes gt-rise { 0% { opacity: 0; transform: translateY(0) scale(.6); } 20% { opacity: .9; } 100% { opacity: 0; transform: translateY(-150px) scale(1.2); } }
+
+/* Respeta "reducir movimiento" del sistema */
+@media (prefers-reduced-motion: reduce) {
+  .gt-root *, .gt-root *::before, .gt-root *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

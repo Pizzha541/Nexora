@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CircleHelp,
   Command,
+  Compass,
   Copy,
   Cpu,
   Download,
@@ -54,6 +55,7 @@ import {
   importBaseCampAssets,
   deleteVisualAsset,
   readVisualAsset,
+  readBuiltinInitialScreen,
   saveVisualSettings,
   executePluginAction,
   executeObsAction,
@@ -71,10 +73,13 @@ import {
   installPluginPackage,
   setPluginExecutionApproval,
   uninstallPlugin,
+  setOnboardingCompleted,
 } from "./lib/backend";
 import type { BootstrapState, ButtonEvent, DeviceMode, FolderNode, InstalledPlugin, KeyAction, KeyConfig, MacroDefinition, ObsCatalog, PluginActionDefinition, PluginCatalogEntry, Profile, UpdateStatus, VisualAsset, VisualSettings, VoxoraCatalog } from "./types";
 import { shouldShowUpdatePrompt } from "./lib/updatePrompt";
+import { ASSET_CATEGORIES, assetCategory, categoryCounts, categoryLabel, type AssetCategoryId } from "./lib/assetCategories";
 import { ActionLibrary, EditorWorkspace, KeyInspector, type NativeActionDrop, type PluginDrop } from "./components/EditorWorkspace";
+import { GuidedTour } from "./components/GuidedTour";
 import { NATIVE_PLUGINS } from "./lib/nativePlugins";
 import {
   isSupportedVisualFile,
@@ -201,7 +206,7 @@ function KeyGrid({ keys, selected, pressedKeys = new Set(), runtimeFeedback = {}
     [NEXORA_PLUGIN_ACTION_MIME, NEXORA_NATIVE_ACTION_MIME, NEXORA_KEY_MIME, NEXORA_ASSET_MIME, "Files"].includes(type));
 
   return (
-    <div className="key-grid" aria-label="Teclas del DisplayPad">
+    <div className="key-grid" data-tour="keygrid" aria-label="Teclas del DisplayPad">
       {keys.map((key) => {
         const feedback = runtimeFeedback[key.index];
         const action = key.actions[0];
@@ -344,15 +349,21 @@ function KeyEditor({ keyConfig, assets, hardwareReady, onImport, onApplyHardware
 function LibraryPanel({ assets, onImport, onAssign, onDelete, onImportBaseCamp }: { assets: VisualAsset[]; onImport: (files: FileList) => Promise<VisualAsset[]>; onAssign: (asset: VisualAsset) => void; onDelete: (asset: VisualAsset) => Promise<void>; onImportBaseCamp: () => Promise<{ imported: number; total: number; source: string }> }) {
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState<AssetCategoryId>("all");
+  const [baseCampFolder, setBaseCampFolder] = useState("");
   const [limit, setLimit] = useState(80);
+  const counts = categoryCounts(assets);
+  const baseCampFolders = [...new Set(assets.filter((asset) => asset.source === "basecamp" && asset.category).map((asset) => asset.category as string))].sort((left, right) => left.localeCompare(right, "es"));
   const filtered = assets
+    .filter((asset) => category === "all" || assetCategory(asset) === category)
+    .filter((asset) => category !== "basecamp" || !baseCampFolder || asset.category === baseCampFolder)
     .filter((asset) => asset.name.toLowerCase().includes(query.toLowerCase()))
     .sort((left, right) => Number(right.source === "nexora") - Number(left.source === "nexora") || left.name.localeCompare(right.name, "es"));
   const includedCount = assets.filter((asset) => asset.source === "nexora").length;
   return (
     <div className="section-stack">
       <div className="section-title"><span><em>04</em> Biblioteca</span><h1>Recursos visuales reutilizables</h1><p>Importa PNG, JPG, WEBP o GIF una sola vez y reutilízalo en cualquier tecla, carpeta o pantalla inicial.</p></div>
-      <div className="library-toolbar glass-card">
+      <div className="library-toolbar glass-card" data-tour="library-toolbar">
         <label className="primary-button file-button"><ImagePlus size={17} /> Importar imágenes o GIF
           <input multiple type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={(event) => {
             if (!event.target.files?.length) return;
@@ -364,20 +375,29 @@ function LibraryPanel({ assets, onImport, onAssign, onDelete, onImportBaseCamp }
         <p>{includedCount} imágenes originales vienen incluidas con NEXORA. También puede detectar una instalación legítima de Base Camp o dejarte elegir su carpeta.</p>
         {message && <strong>{message}</strong>}
       </div>
-      <label className="library-search"><Search size={16} /><input value={query} onChange={(event) => { setQuery(event.target.value); setLimit(80); }} placeholder={`Buscar entre ${assets.length} recursos`} /></label>
-      <div className="asset-grid">
+      <div className="asset-browser">
+        <aside className="asset-folders glass-card" aria-label="Categorías de iconos">
+          <span className="eyebrow">CARPETAS</span>
+          {ASSET_CATEGORIES.map((item) => <button type="button" key={item.id} className={category === item.id ? "active" : ""} onClick={() => { setCategory(item.id); if (item.id !== "basecamp") setBaseCampFolder(""); setLimit(80); }}><FolderTree size={16} /><span><strong>{item.label}</strong><small>{item.description}</small></span><em>{counts[item.id]}</em></button>)}
+          {category === "basecamp" && baseCampFolders.length > 0 && <div className="asset-subfolders"><button type="button" className={!baseCampFolder ? "active" : ""} onClick={() => setBaseCampFolder("")}>Todas</button>{baseCampFolders.map((folder) => <button type="button" className={baseCampFolder === folder ? "active" : ""} key={folder} onClick={() => setBaseCampFolder(folder)}>{folder}</button>)}</div>}
+        </aside>
+        <section className="asset-browser-content">
+          <label className="library-search"><Search size={16} /><input value={query} onChange={(event) => { setQuery(event.target.value); setLimit(80); }} placeholder={`Buscar en ${categoryLabel(category)}`} /></label>
+          <div className="asset-grid">
         {filtered.slice(0, limit).map((asset) => <article className="asset-card glass-card" key={asset.id} draggable onDragStart={(event) => {
           event.dataTransfer.effectAllowed = "copy";
           event.dataTransfer.setData(NEXORA_ASSET_MIME, asset.id);
         }}>
           <div className="asset-preview"><AssetVisual assetId={asset.id} alt={asset.name} />{asset.animated && <span>GIF</span>}</div>
-          <h3>{asset.name}</h3><small>{(asset.sizeBytes / 1024).toFixed(1)} KB · {asset.mimeType.replace("image/", "").toUpperCase()} · {asset.source === "basecamp" ? "Base Camp" : asset.source === "nexora" ? "Incluido con NEXORA" : "Usuario"}</small>
+          <h3>{asset.name}</h3><small>{categoryLabel(assetCategory(asset))} · {(asset.sizeBytes / 1024).toFixed(1)} KB · {asset.mimeType.replace("image/", "").toUpperCase()}</small>
           <button type="button" className="secondary-button" onClick={() => onAssign(asset)}>Asignar a tecla seleccionada</button>
           {asset.source !== "nexora" && <button type="button" className="danger-button" onClick={() => { if (!window.confirm(`¿Eliminar “${asset.name}” de la biblioteca y quitarla de todas las teclas?`)) return; void onDelete(asset).then(() => setMessage("Recurso eliminado.")).catch((error) => setMessage(error instanceof Error ? error.message : String(error))); }}><Trash2 size={14} /> Eliminar recurso</button>}
         </article>)}
         {!filtered.length && <div className="empty-library glass-card"><ImagePlus size={34} /><h2>{assets.length ? "No hay coincidencias" : "Tu biblioteca está vacía"}</h2><p>Admite PNG, JPG, WEBP, SVG y GIF de hasta 12 MB.</p></div>}
+          </div>
+          {filtered.length > limit && <button type="button" className="secondary-button library-more" onClick={() => setLimit((value) => value + 80)}>Mostrar 80 más ({filtered.length - limit} restantes)</button>}
+        </section>
       </div>
-      {filtered.length > limit && <button type="button" className="secondary-button library-more" onClick={() => setLimit((value) => value + 80)}>Mostrar 80 más ({filtered.length - limit} restantes)</button>}
     </div>
   );
 }
@@ -385,7 +405,7 @@ function LibraryPanel({ assets, onImport, onAssign, onDelete, onImportBaseCamp }
 function PanoramaPreview({ assetId }: { assetId?: string }) {
   const [source, setSource] = useState("");
   useEffect(() => {
-    if (!assetId) { setSource(""); return; }
+    if (!assetId) { void readBuiltinInitialScreen().then(setSource).catch(() => setSource("")); return; }
     void cachedVisualAsset(assetId).then(setSource).catch(() => setSource(""));
   }, [assetId]);
   return <div className="panorama-preview">{Array.from({ length: 12 }, (_, index) => {
@@ -479,7 +499,7 @@ function PluginsPanel({ plugins, catalog, keys, selectedKey, onRefresh, onAssign
       setMessage(`“${action.name}” asignada a la tecla ${key + 1}.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   };
-  return <div className="section-stack plugin-hub">
+  return <div className="section-stack plugin-hub" data-tour="plugins">
     <div className="section-title"><span><em>06</em> Plugin Hub</span><h1>Plugins propios, listos para usar</h1><p>OBS, Spotify, Discord, Twitch y Camo ahora tienen módulos nativos de NEXORA. Los paquetes externos siguen disponibles únicamente como compatibilidad experimental.</p></div>
     <section className="plugin-toolbar glass-card">
       <label className="plugin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar plugins o acciones" /></label>
@@ -631,7 +651,7 @@ function IntegrationPanel({ state, selectedKey, voxoraCatalog, onRefresh, onRefr
   return (
     <div className="section-stack">
       <div className="section-title"><span><em>01</em> Integraciones independientes</span><h1>Conecta tu flujo</h1><p>OBS y VOXORA funcionan mediante protocolos locales. NEXORA descubre VOXORA automáticamente y nunca muestra ni registra su token.</p></div>
-      <div className="integration-layout">
+      <div className="integration-layout" data-tour="integrations">
         <div className="integration-list">
           {state.integrations.map((integration) => (
             <article className="integration-card" key={integration.id}>
@@ -841,6 +861,7 @@ function MacrosPanel({ macros, onChange }: { macros: MacroDefinition[]; onChange
 function App() {
   const queryParameters = new URLSearchParams(window.location.search);
   const requestedSection = queryParameters.get("section") as Section | null;
+  const forceOnboarding = queryParameters.get("onboarding") === "1";
   const initialSection: Section = requestedSection && sectionIds.includes(requestedSection) ? requestedSection : "displaypad";
   const [section, setSection] = useState<Section>(initialSection);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -858,6 +879,8 @@ function App() {
   const [updatePrompt, setUpdatePrompt] = useState<UpdateStatus | null>(null);
   const [dismissedUpdate, setDismissedUpdate] = useState<string | null>(null);
   const [updatePromptBusy, setUpdatePromptBusy] = useState(false);
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+  const [tourReplay, setTourReplay] = useState(false);
   const stateRef = useRef<BootstrapState | null>(null);
   const dirtyProfiles = useRef(new Map<string, Profile>());
   const saveTimer = useRef<number | null>(null);
@@ -1264,11 +1287,11 @@ function App() {
       center={<div className="device-stage">
         <div className="stage-toolbar">
           <div><span className="eyebrow">EDITOR EN TIEMPO REAL</span><h1>{selectedFolder?.name ?? activeProfile.name}</h1></div>
-          <div className="stage-controls">
+          <div className="stage-controls" data-tour="profile">
             <select aria-label="Perfil activo" value={activeProfile.id} onChange={(event) => { const profile = state.profiles.find((item) => item.id === event.target.value); if (profile) void selectProfile(profile); }}>{state.profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select>
           </div>
         </div>
-        <div className="stage-folder-bar">
+        <div className="stage-folder-bar" data-tour="folders">
           <button type="button" className={!selectedFolderId ? "active" : ""} onClick={() => { setSelectedFolderId(null); setSelectedKey(0); }}><Layers3 size={14} /> Principal</button>
           {activeProfile.folders.map((folder) => <button type="button" className={selectedFolderId === folder.id ? "active" : ""} key={folder.id} onClick={() => { setSelectedFolderId(folder.id); setSelectedKey(0); }}><FolderTree size={14} /> {folder.name}</button>)}
           <button type="button" className="stage-add" onClick={() => void createFolder()}><Plus size={14} /> Carpeta</button>
@@ -1304,6 +1327,7 @@ function App() {
       inspector={selectedConfig ? <KeyInspector
         keyConfig={selectedConfig}
         assetPreview={selectedConfig.iconPath ? <AssetVisual assetId={selectedConfig.iconPath} alt={selectedConfig.name} /> : undefined}
+        renderAsset={(assetId, alt) => <AssetVisual assetId={assetId} alt={alt} />}
         assets={state.assets}
         profiles={state.profiles}
         folders={activeProfile.folders}
@@ -1348,6 +1372,17 @@ function App() {
   );
 
   const updatePromptVisible = shouldShowUpdatePrompt(updatePrompt, dismissedUpdate);
+  const onboardingVisible = !onboardingDismissed && (forceOnboarding || !state.onboardingCompleted);
+  const finishOnboarding = () => {
+    setOnboardingDismissed(true);
+    setState((current) => current ? { ...current, onboardingCompleted: true } : current);
+    if (!forceOnboarding) void setOnboardingCompleted(true);
+  };
+  const tourVisible = tourReplay || onboardingVisible;
+  const finishTour = () => {
+    setTourReplay(false);
+    if (onboardingVisible) finishOnboarding();
+  };
 
   return (
     <div className={`app-shell modern-shell ${section === "displaypad" ? "editor-mode" : ""}`}>
@@ -1356,12 +1391,13 @@ function App() {
           <button type="button" className="modern-brand" onClick={() => setSection("displaypad")} title="Volver al DisplayPad"><img src={bundledAsset("noxoralogo.png")} alt="" /><span>NEXORA<small>v{state.version}</small></span></button>
           <nav className="modern-tabs" aria-label="Secciones principales de NEXORA">{primaryNavigation.map((item) => <button type="button" key={item.id} className={section === item.id ? "active" : ""} onClick={() => { setSection(item.id); setMoreOpen(false); }} title={item.label}><item.icon size={16} /><span>{item.label}</span></button>)}</nav>
           <div className="modern-app-actions">
-            <div className={`more-navigation ${moreOpen ? "open" : ""}`}>
+            <div className={`more-navigation ${moreOpen ? "open" : ""}`} data-tour="more">
               <button type="button" className={`more-navigation-trigger ${secondaryNavigation.some((item) => item.id === section) ? "active" : ""}`} onClick={() => setMoreOpen((value) => !value)} aria-expanded={moreOpen}><MoreHorizontal size={17} /><span>Más</span></button>
               {moreOpen && <div className="more-navigation-menu">{secondaryNavigation.map((item) => <button type="button" key={item.id} className={section === item.id ? "active" : ""} onClick={() => { setSection(item.id); setMoreOpen(false); }}><item.icon size={17} /><span><strong>{item.label}</strong><small>{item.description}</small></span></button>)}</div>}
             </div>
             <StatusPill connected={state.device.connected} mode={state.device.mode} />
-            <button type="button" className={`icon-button ${section === "settings" ? "active" : ""}`} title="Configuración" onClick={() => { setSection("settings"); setMoreOpen(false); }}><Settings size={17} /></button>
+            <button type="button" className={`icon-button ${section === "settings" ? "active" : ""}`} data-tour="settings" title="Configuración" onClick={() => { setSection("settings"); setMoreOpen(false); }}><Settings size={17} /></button>
+            <button type="button" className="icon-button" data-tour="help" title="Recorrido guiado · Guided tour" aria-label="Recorrido guiado" onClick={() => { setMoreOpen(false); setTourReplay(true); }}><Compass size={17} /></button>
             <button type="button" className={`icon-button ${section === "about" ? "active" : ""}`} title="Acerca de" onClick={() => { setSection("about"); setMoreOpen(false); }}><CircleHelp size={17} /></button>
           </div>
         </header>
@@ -1386,6 +1422,7 @@ function App() {
           </div>
         </section>
       </div>}
+      {tourVisible && <GuidedTour onFinish={finishTour} onNavigate={(next) => { setSection(next); setMoreOpen(false); }} />}
       {saving && <div className="toast"><LoaderCircle className="spin" size={16} /> Guardando perfil…</div>}
       {pluginNotice && <div className="toast plugin-toast"><Boxes size={16} /> {pluginNotice}</div>}
     </div>

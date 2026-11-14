@@ -181,6 +181,7 @@ export type VisualAsset = {
   animated: boolean;
   importedAt: string;
   source?: "user" | "basecamp" | "nexora";
+  category?: string;
 };
 
 export type VisualSettings = {
@@ -205,6 +206,7 @@ export type UpdateStatus = {
 
 export type BootstrapState = {
   version: string;
+  onboardingCompleted: boolean;
   activeProfileId: string;
   profiles: Profile[];
   macros: MacroDefinition[];

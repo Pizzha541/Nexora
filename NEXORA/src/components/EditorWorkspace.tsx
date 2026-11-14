@@ -21,6 +21,7 @@ import {
 import type { ActionKind, FolderNode, InstalledPlugin, KeyAction, KeyConfig, ObsCatalog, Profile, SequenceStep, VisualAsset, VoxoraCatalog } from "../types";
 import { NEXORA_NATIVE_ACTION_MIME, NEXORA_PLUGIN_ACTION_MIME } from "../lib/realtime";
 import { findNativeAction, NATIVE_PLUGINS, type NativeSettingField } from "../lib/nativePlugins";
+import { ASSET_CATEGORIES, assetCategory, categoryCounts, type AssetCategoryId } from "../lib/assetCategories";
 
 export type PluginDrop = { pluginId: string; actionId: string; settings: Record<string, unknown> };
 export type NativeActionDrop = {
@@ -176,7 +177,7 @@ export function EditorWorkspace({ library, center, inspector }: { library: React
     <div className="editor-workspace" style={{ "--editor-right": rightOpen ? `${rightWidth}px` : "42px" } as React.CSSProperties}>
       <section className="editor-main">
         <div className="editor-center">{center}</div>
-        <div className="editor-inspector">{inspector}</div>
+        <div className="editor-inspector" data-tour="inspector">{inspector}</div>
       </section>
       <div className="pane-resizer" onPointerDown={resize} />
       <aside className={`editor-pane editor-library ${rightOpen ? "" : "collapsed"}`}>
@@ -204,7 +205,7 @@ export function ActionLibrary({ profiles, folders, plugins, obsScenes, obsConnec
   const categories = buildCategories(profiles, folders, plugins, obsScenes);
   const normalized = query.trim().toLocaleLowerCase("es");
 
-  return <div className={`action-library ${mode}`}>
+  return <div className={`action-library ${mode}`} data-tour="actions">
     <header><div><span className="eyebrow">BIBLIOTECA</span><h2>Acciones</h2></div><div className="library-mode"><button type="button" className={mode === "basic" ? "active" : ""} onClick={() => setMode("basic")}>Básico</button><button type="button" className={mode === "advanced" ? "active" : ""} onClick={() => setMode("advanced")}>Todo</button></div></header>
     <label className="editor-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar acciones" /></label>
     <div className="library-tabs"><button type="button" className={view === "keys" ? "active" : ""} onClick={() => setView("keys")}>Teclas</button><button type="button" className={view === "plugins" ? "active" : ""} onClick={() => { setView("plugins"); setMode("advanced"); }}>Plugins</button></div>
@@ -252,9 +253,10 @@ const actionLabel = (key: KeyConfig, profiles: Profile[], folders: FolderNode[],
   return labels[action.kind] ?? action.kind;
 };
 
-export function KeyInspector({ keyConfig, assetPreview, assets, profiles, folders, plugins, obsCatalog, obsConnected, voxoraCatalog, voxoraConnected, onChange, onImport, onPickFile, onOpenPluginInspector, onTest }: {
+export function KeyInspector({ keyConfig, assetPreview, renderAsset, assets, profiles, folders, plugins, obsCatalog, obsConnected, voxoraCatalog, voxoraConnected, onChange, onImport, onPickFile, onOpenPluginInspector, onTest }: {
   keyConfig: KeyConfig;
   assetPreview?: ReactNode;
+  renderAsset?: (assetId: string, alt?: string) => ReactNode;
   assets: VisualAsset[];
   profiles: Profile[];
   folders: FolderNode[];
@@ -274,13 +276,26 @@ export function KeyInspector({ keyConfig, assetPreview, assets, profiles, folder
   const [switchTab, setSwitchTab] = useState<0 | 1>(0);
   const [newSequenceAction, setNewSequenceAction] = useState("obs-record-toggle");
   const [appearanceOpen, setAppearanceOpen] = useState(action.kind === "none");
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
+  const [iconQuery, setIconQuery] = useState("");
+  const [iconCategory, setIconCategory] = useState<AssetCategoryId>("all");
+  const [baseCampFolder, setBaseCampFolder] = useState("");
+  const [previewAssetId, setPreviewAssetId] = useState(keyConfig.iconPath ?? "");
   useEffect(() => { setSequenceOpen(action.kind === "multiAction" || action.kind === "multiSwitch"); setSwitchTab(0); }, [keyConfig.index, action.kind]);
-  useEffect(() => { setAppearanceOpen(action.kind === "none"); }, [keyConfig.index]);
+  useEffect(() => { setAppearanceOpen(action.kind === "none"); setIconPickerOpen(false); setPreviewAssetId(keyConfig.iconPath ?? ""); }, [keyConfig.index]);
   const setAction = (change: Record<string, unknown>) => onChange({ ...keyConfig, actions: [{ ...action, ...change }] });
   const plugin = action.kind === "plugin" ? plugins.find((item) => item.id === action.pluginId) : undefined;
   const pluginAction = plugin?.actions.find((item) => item.id === action.actionId);
   const allFolders = flattenFolders(folders);
   const nativeDefinition = findNativeAction(action.kind, action.value, action.settings);
+  const assetCounts = categoryCounts(assets);
+  const baseCampFolders = [...new Set(assets.filter((asset) => asset.source === "basecamp" && asset.category).map((asset) => asset.category as string))].sort((left, right) => left.localeCompare(right, "es"));
+  const visibleAssets = assets.filter((asset) => (iconCategory === "all" || assetCategory(asset) === iconCategory) && (iconCategory !== "basecamp" || !baseCampFolder || asset.category === baseCampFolder) && asset.name.toLocaleLowerCase("es").includes(iconQuery.toLocaleLowerCase("es")));
+  const selectedPreviewAsset = assets.find((asset) => asset.id === previewAssetId);
+  const applyPreviewAsset = () => {
+    onChange({ ...keyConfig, iconPath: previewAssetId || undefined, animated: selectedPreviewAsset?.animated ?? false });
+    setIconPickerOpen(false);
+  };
   const fieldOptions = (field: NativeSettingField) => {
     if (field.options) return field.options;
     const source = field.source;
@@ -356,8 +371,19 @@ export function KeyInspector({ keyConfig, assetPreview, assets, profiles, folder
     </div>}
     <details className="inspector-appearance" open={appearanceOpen} onToggle={(event) => setAppearanceOpen(event.currentTarget.open)}>
       <summary><ImagePlus size={15} /><span><strong>Apariencia</strong><small>Imagen, texto y color</small></span><ChevronDown size={14} /></summary>
-      <div className="inspector-appearance-fields"><div className="inspector-row"><label>Texto<input value={keyConfig.text} maxLength={12} onChange={(event) => onChange({ ...keyConfig, text: event.target.value })} /></label><label>Color<input className="color-input" type="color" value={keyConfig.color} onChange={(event) => onChange({ ...keyConfig, color: event.target.value })} /></label></div><label>Imagen o GIF<select value={keyConfig.iconPath ?? ""} onChange={(event) => { const asset = assets.find((item) => item.id === event.target.value); onChange({ ...keyConfig, iconPath: event.target.value || undefined, animated: asset?.animated ?? false }); }}><option value="">Sin imagen</option>{assets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name}{asset.animated ? " · GIF" : ""}</option>)}</select></label><label className="file-button inspector-file"><ImagePlus size={15} /> Importar<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={(event) => { if (!event.target.files?.length) return; void onImport(event.target.files).then(([asset]) => { if (asset) onChange({ ...keyConfig, iconPath: asset.id, animated: asset.animated }); }); event.target.value = ""; }} /></label>{keyConfig.iconPath && <button type="button" className="secondary-button" onClick={() => onChange({ ...keyConfig, iconPath: undefined, animated: false })}><Trash2 size={14} /> Quitar imagen</button>}</div>
+      <div className="inspector-appearance-fields"><div className="inspector-row"><label>Texto<input value={keyConfig.text} maxLength={12} onChange={(event) => onChange({ ...keyConfig, text: event.target.value })} /></label><label>Color<input className="color-input" type="color" value={keyConfig.color} onChange={(event) => onChange({ ...keyConfig, color: event.target.value })} /></label></div><button type="button" className="icon-picker-trigger" onClick={() => { setPreviewAssetId(keyConfig.iconPath ?? ""); setIconPickerOpen(true); }}><span className="icon-picker-trigger-preview">{keyConfig.iconPath && renderAsset?.(keyConfig.iconPath, keyConfig.name)}{!keyConfig.iconPath && <ImagePlus size={18} />}</span><span><strong>{keyConfig.iconPath ? assets.find((asset) => asset.id === keyConfig.iconPath)?.name ?? "Icono personalizado" : "Elegir icono o GIF"}</strong><small>Explorar por categorías y previsualizar</small></span><ChevronDown size={14} /></button><label className="file-button inspector-file"><ImagePlus size={15} /> Importar<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={(event) => { if (!event.target.files?.length) return; void onImport(event.target.files).then(([asset]) => { if (asset) onChange({ ...keyConfig, iconPath: asset.id, animated: asset.animated }); }); event.target.value = ""; }} /></label>{keyConfig.iconPath && <button type="button" className="secondary-button" onClick={() => onChange({ ...keyConfig, iconPath: undefined, animated: false })}><Trash2 size={14} /> Quitar imagen</button>}</div>
     </details>
+    {iconPickerOpen && <div className="icon-picker-backdrop" role="dialog" aria-modal="true" aria-label="Selector de iconos">
+      <section className="icon-picker-modal">
+        <header><div><span className="eyebrow">PERSONALIZACIÓN VISUAL</span><h2>Elige un icono</h2><p>Explora tus recursos por carpetas y comprueba cómo quedarán antes de aplicarlos.</p></div><button type="button" className="icon-button" aria-label="Cerrar" onClick={() => setIconPickerOpen(false)}><PanelRightClose size={19} /></button></header>
+        <div className="icon-picker-body">
+          <aside className="icon-picker-folders">{ASSET_CATEGORIES.map((category) => <button type="button" className={iconCategory === category.id ? "active" : ""} key={category.id} onClick={() => { setIconCategory(category.id); if (category.id !== "basecamp") setBaseCampFolder(""); }}><FolderOpen size={16} /><span>{category.label}</span><em>{assetCounts[category.id]}</em></button>)}{iconCategory === "basecamp" && baseCampFolders.length > 0 && <div className="icon-picker-subfolders"><strong>Carpetas de Base Camp</strong><button type="button" className={!baseCampFolder ? "active" : ""} onClick={() => setBaseCampFolder("")}>Todas</button>{baseCampFolders.map((folder) => <button type="button" className={baseCampFolder === folder ? "active" : ""} key={folder} onClick={() => setBaseCampFolder(folder)}>{folder}</button>)}</div>}</aside>
+          <div className="icon-picker-results"><label className="icon-picker-search"><Search size={16} /><input autoFocus value={iconQuery} onChange={(event) => setIconQuery(event.target.value)} placeholder="Buscar iconos, fotos o GIF…" /></label><div className="icon-picker-grid"><button type="button" className={!previewAssetId ? "selected empty" : "empty"} onClick={() => setPreviewAssetId("")}><span><Trash2 size={20} /></span><small>Sin imagen</small></button>{visibleAssets.map((asset) => <button type="button" className={previewAssetId === asset.id ? "selected" : ""} key={asset.id} onClick={() => setPreviewAssetId(asset.id)} onDoubleClick={applyPreviewAsset}><span>{renderAsset?.(asset.id, asset.name) ?? <ImagePlus size={22} />}{asset.animated && <em>GIF</em>}</span><small title={asset.name}>{asset.name}</small></button>)}</div>{!visibleAssets.length && <div className="icon-picker-empty"><ImagePlus size={28} /><strong>No hay recursos en esta carpeta</strong><small>Prueba otra categoría o importa una imagen.</small></div>}</div>
+          <aside className="icon-picker-live"><span className="eyebrow">PREVISUALIZACIÓN</span><div className="icon-picker-key" style={{ "--key-color": keyConfig.color } as React.CSSProperties}>{previewAssetId && renderAsset?.(previewAssetId, selectedPreviewAsset?.name)}{keyConfig.text && <span>{keyConfig.text}</span>}{!previewAssetId && !keyConfig.text && <ImagePlus size={26} />}</div><strong>{selectedPreviewAsset?.name ?? "Tecla sin imagen"}</strong><small>{selectedPreviewAsset?.animated ? "GIF animado" : selectedPreviewAsset ? "Imagen estática" : "Se mostrará el color y el texto"}</small><div className="icon-picker-custom-fields"><label>Texto<input value={keyConfig.text} maxLength={12} onChange={(event) => onChange({ ...keyConfig, text: event.target.value })} /></label><label>Color<input type="color" value={keyConfig.color} onChange={(event) => onChange({ ...keyConfig, color: event.target.value })} /></label></div></aside>
+        </div>
+        <footer><label className="secondary-button file-button"><ImagePlus size={15} /> Importar archivo<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={(event) => { if (!event.target.files?.length) return; void onImport(event.target.files).then(([asset]) => { if (asset) { setPreviewAssetId(asset.id); setIconCategory("user"); } }); event.target.value = ""; }} /></label><span>{visibleAssets.length} recursos</span><div><button type="button" className="secondary-button" onClick={() => setIconPickerOpen(false)}>Cancelar</button><button type="button" className="primary-button" onClick={applyPreviewAsset}>Aplicar a la tecla</button></div></footer>
+      </section>
+    </div>}
     {sequenceOpen && (action.kind === "multiAction" || action.kind === "multiSwitch") && <div className="sequence-modal" role="dialog" aria-label="Editor de acciones múltiples">
       <header><button type="button" className="sequence-back" onClick={() => setSequenceOpen(false)}><ChevronLeft size={18} /> Volver</button><div><span className="eyebrow">TECLA {keyConfig.index + 1}</span><h2>{action.kind === "multiSwitch" ? "Multi Action Switch" : "Multi Action"}</h2></div><button type="button" className="icon-button" onClick={() => setSequenceOpen(false)} aria-label="Cerrar editor"><PanelRightClose size={18} /></button></header>
       {action.kind === "multiSwitch" && <div className="sequence-tabs"><button type="button" className={switchTab === 0 ? "active" : ""} onClick={() => setSwitchTab(0)}>Estado 1</button><button type="button" className={switchTab === 1 ? "active" : ""} onClick={() => setSwitchTab(1)}>Estado 2</button></div>}

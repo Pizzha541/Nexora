@@ -14,6 +14,23 @@ export async function getBootstrapState(): Promise<BootstrapState> {
   }
 }
 
+export async function readBuiltinInitialScreen(): Promise<string> {
+  try {
+    return await invoke<string>("read_builtin_initial_screen");
+  } catch {
+    return `${import.meta.env.BASE_URL}assets/noxorabanner.png`;
+  }
+}
+
+export async function setOnboardingCompleted(completed: boolean): Promise<boolean> {
+  try {
+    return await invoke<boolean>("set_onboarding_completed", { completed });
+  } catch {
+    localStorage.setItem("nexora.onboardingCompleted", String(completed));
+    return completed;
+  }
+}
+
 export async function saveProfile(profile: Profile): Promise<Profile> {
   try {
     return await invoke<Profile>("save_profile", { profile });
