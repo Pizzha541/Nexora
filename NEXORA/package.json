@@ -1,7 +1,7 @@
 {
   "name": "nexora",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Control profesional para Mountain DisplayPad con imágenes, GIF, perfiles e integraciones.",
   "author": "NEXORA",
   "main": "electron/main.cjs",
@@ -58,12 +58,12 @@
     ],
     "extraResources": [
       {
-        "from": "../USER_FILES/device/basecamp app original/Mountain Base Camp/resources/bin/wwwroot/images",
+        "from": "resources/basecamp-assets",
         "to": "basecamp-assets",
         "filter": ["**/*"]
       },
       {
-        "from": "../USER_FILES/branding",
+        "from": "resources/branding",
         "to": "branding",
         "filter": ["initial_screen.png"]
       }

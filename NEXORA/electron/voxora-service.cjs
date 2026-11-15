@@ -46,6 +46,8 @@ class VoxoraService {
     this.reconnectTimer = null;
     this.reconnectAttempt = 0;
     this.stopped = false;
+    this.lastAudibleVolume = 1;
+    this.muteTogglePromise = Promise.resolve();
   }
 
   async readDiscovery() {
@@ -127,6 +129,21 @@ class VoxoraService {
 
   async action(value, settings = {}) {
     const id = requestId(settings.requestId);
+    if (value === 'voxora.muteToggle') {
+      const pending = this.muteTogglePromise.then(async () => {
+        const result = await this.request('/api/v1/settings');
+        const currentVolume = Number(result.settings?.volume);
+        const audibleVolume = Number.isFinite(currentVolume) && currentVolume > 0
+          ? Math.min(1, currentVolume)
+          : Math.min(1, Math.max(0.05, this.lastAudibleVolume || 1));
+        const nextVolume = Number.isFinite(currentVolume) && currentVolume > 0 ? 0 : audibleVolume;
+        if (nextVolume === 0) this.lastAudibleVolume = audibleVolume;
+        await this.request('/api/v1/settings', { method: 'POST', body: { requestId: id, volume: nextVolume } });
+        return nextVolume === 0 ? 'VOXORA silenciado.' : `VOXORA activado · volumen ${Math.round(nextVolume * 100)}%.`;
+      });
+      this.muteTogglePromise = pending.catch(() => undefined);
+      return pending;
+    }
     if (value === 'voxora.speak') {
       const text = String(settings.text || '').trim();
       if (!text) throw new Error('Escribe el texto que debe decir VOXORA.');

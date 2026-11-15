@@ -16,6 +16,7 @@ async function main() {
     voxoraVersion: '0.12.0', pid: 42, updatedAt: new Date().toISOString(),
   }));
   const calls = [];
+  let currentVolume = 0.72;
   const responses = {
     '/api/v1/health': { ok: true, voxoraVersion: '0.12.0', protocolVersion: '1.0', engine: { ready: true, state: 'idle' }, capabilities: { speak: true } },
     '/api/v1/voices': { ok: true, voices: [{ id: 'voice-1', name: 'Helena', language: 'es-ES', engine: 'microsoft' }] },
@@ -28,7 +29,12 @@ async function main() {
     discoveryFile, webSocketFactory: null,
     fetchImpl: async (url, options) => {
       assert.equal(options.headers.Authorization, `Bearer ${token}`);
-      calls.push({ path: url.pathname, body: options.body ? JSON.parse(options.body) : undefined });
+      const body = options.body ? JSON.parse(options.body) : undefined;
+      calls.push({ path: url.pathname, method: options.method || 'GET', body });
+      if (url.pathname === '/api/v1/settings') {
+        if ((options.method || 'GET') === 'POST' && body?.volume !== undefined) currentVolume = body.volume;
+        return { ok: true, status: 200, json: async () => ({ ok: true, settings: { voiceId: 'voice-1', rate: 1, pitch: 1, volume: currentVolume } }) };
+      }
       return { ok: true, status: 200, json: async () => responses[url.pathname] };
     },
   });
@@ -44,6 +50,10 @@ async function main() {
     assert.equal(calls.at(-1).body.priority, 20);
     await service.action('voxora.pause');
     assert.equal(calls.at(-1).body.operation, 'pause');
+    assert.match(await service.action('voxora.muteToggle'), /silenciado/i);
+    assert.equal(currentVolume, 0);
+    assert.match(await service.action('voxora.muteToggle'), /activado/i);
+    assert.equal(currentVolume, 0.72);
     await assert.rejects(() => service.action('voxora.speak', { text: 'x'.repeat(501) }), /500/);
 
     fs.writeFileSync(discoveryFile, JSON.stringify({ protocolVersion: '1.0', httpBaseUrl: 'http://example.com', webSocketUrl: 'ws://127.0.0.1:8791/api/v1/events', token }));

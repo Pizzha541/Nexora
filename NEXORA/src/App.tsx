@@ -175,6 +175,7 @@ function DefaultActionIcon({ action, color = "#111827" }: { action?: KeyAction; 
     recordToggle: "REC", recordStart: "REC", recordStop: "STOP", streamToggle: "LIVE", streamStart: "LIVE", streamStop: "OFF",
     scene: "SCN", previewScene: "PREV", virtualCameraToggle: "CAM", replayBufferToggle: "RPL", replayBufferSave: "SAVE",
     studioModeToggle: "STD", sourceVisibilityToggle: "EYE", inputMuteToggle: "MIC", screenshot: "SHOT", transition: "FX", filterToggle: "FLT",
+    "voxora.muteToggle": "MUTE",
   };
   const fallback: Partial<Record<KeyAction["kind"], string>> = { multiAction: "MULTI", multiSwitch: "SW", hotkey: "KEY", media: "MEDIA", profile: "PROF", folder: "DIR", openUrl: "WEB", launchPath: "APP", plugin: "PLUG", native: "APP", obs: "OBS" };
   const label = (labels[action.value || ""] || fallback[action.kind] || "NX").slice(0, 5);

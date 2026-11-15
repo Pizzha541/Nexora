@@ -197,6 +197,7 @@ function detectedBaseCampImageRoot() {
   }
   candidates.push(
     path.join(process.resourcesPath, 'basecamp-assets'),
+    path.join(app.getAppPath(), 'resources', 'basecamp-assets'),
     path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Mountain Base Camp'),
     path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Mountain Base Camp'),
     path.resolve(app.getAppPath(), '..', 'USER_FILES', 'device', 'basecamp app original', 'Mountain Base Camp'),
@@ -660,6 +661,7 @@ function builtinInitialScreenPath() {
   if (!fs.existsSync(target)) {
     const candidates = [
       path.join(process.resourcesPath, 'branding', 'initial_screen.png'),
+      path.join(app.getAppPath(), 'resources', 'branding', 'initial_screen.png'),
       path.resolve(app.getAppPath(), '..', 'USER_FILES', 'branding', 'initial_screen.png'),
       path.join(app.getAppPath(), 'dist', 'assets', 'noxorabanner.png'),
     ];
@@ -676,6 +678,7 @@ function defaultActionIconPath(action, color = '#111827') {
     recordToggle: 'REC', recordStart: 'REC', recordStop: 'STOP', streamToggle: 'LIVE', streamStart: 'LIVE', streamStop: 'OFF',
     scene: 'SCN', previewScene: 'PREV', virtualCameraToggle: 'CAM', replayBufferToggle: 'RPL', replayBufferSave: 'SAVE',
     studioModeToggle: 'STD', sourceVisibilityToggle: 'EYE', inputMuteToggle: 'MIC', screenshot: 'SHOT', transition: 'FX', filterToggle: 'FLT',
+    'voxora.muteToggle': 'MUTE',
   };
   const fallback = { multiAction: 'MULTI', multiSwitch: 'SW', hotkey: 'KEY', media: 'MEDIA', profile: 'PROF', folder: 'DIR', openUrl: 'WEB', launchPath: 'APP', plugin: 'PLUG', native: 'APP', obs: 'OBS' };
   const label = String(labels[action.value] || fallback[action.kind] || 'NX').slice(0, 5);
