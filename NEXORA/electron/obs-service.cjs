@@ -51,6 +51,8 @@ class ObsService {
         this.handleMessage(message);
       });
       socket.once('close', () => {
+        if (this.socket !== socket) return;
+        this.socket = null;
         clearTimeout(timer);
         this.connected = false;
         for (const request of this.pending.values()) request.reject(new Error('OBS se desconectó.'));
@@ -174,6 +176,41 @@ class ObsService {
         ? data.scenes.map((scene) => String(scene.sceneName || '')).filter(Boolean)
         : [],
     };
+  }
+
+  async getActionState(action, settings = {}) {
+    const parseRef = (key) => {
+      try {
+        const value = JSON.parse(String(settings[key] || ''));
+        return Array.isArray(value) ? value : [];
+      } catch { return []; }
+    };
+    if (action === 'scene') {
+      const data = await this.request('GetCurrentProgramScene');
+      return String(data.currentProgramSceneName || '') === String(settings.sceneName || '');
+    }
+    if (action === 'recordToggle' || action === 'recordPauseToggle') {
+      const data = await this.request('GetRecordStatus');
+      return action === 'recordPauseToggle' ? Boolean(data.outputPaused) : Boolean(data.outputActive);
+    }
+    if (action === 'streamToggle') return Boolean((await this.request('GetStreamStatus')).outputActive);
+    if (action === 'virtualCameraToggle') return Boolean((await this.request('GetVirtualCamStatus')).outputActive);
+    if (action === 'replayBufferToggle') return Boolean((await this.request('GetReplayBufferStatus')).outputActive);
+    if (action === 'studioModeToggle') return Boolean((await this.request('GetStudioModeEnabled')).studioModeEnabled);
+    if (action === 'inputMuteToggle' && settings.inputName) {
+      return Boolean((await this.request('GetInputMute', { inputName: String(settings.inputName) })).inputMuted);
+    }
+    if (action === 'sourceVisibilityToggle') {
+      const [sceneName, rawId] = parseRef('sceneItemRef');
+      if (!sceneName || !Number.isFinite(Number(rawId))) return null;
+      return Boolean((await this.request('GetSceneItemEnabled', { sceneName: String(sceneName), sceneItemId: Number(rawId) })).sceneItemEnabled);
+    }
+    if (action === 'filterToggle') {
+      const [sourceName, filterName] = parseRef('filterRef');
+      if (!sourceName || !filterName) return null;
+      return Boolean((await this.request('GetSourceFilter', { sourceName: String(sourceName), filterName: String(filterName) })).filterEnabled);
+    }
+    return null;
   }
 
   async getCatalog() {

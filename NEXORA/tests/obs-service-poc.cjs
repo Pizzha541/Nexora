@@ -11,6 +11,9 @@ async function main() {
     if (requestType === 'GetInputMute') return { inputMuted: false };
     if (requestType === 'GetSceneItemEnabled') return { sceneItemEnabled: true };
     if (requestType === 'GetSourceFilter') return { filterEnabled: false };
+    if (requestType === 'GetCurrentProgramScene') return { currentProgramSceneName: 'Juego' };
+    if (requestType === 'GetRecordStatus') return { outputActive: true, outputPaused: false };
+    if (requestType === 'GetStreamStatus') return { outputActive: true };
     return {};
   };
 
@@ -34,6 +37,15 @@ async function main() {
     { requestType: 'SetCurrentSceneTransition', requestData: { transitionName: 'Fade' } },
     { requestType: 'SetCurrentSceneTransitionDuration', requestData: { transitionDuration: 450 } },
   ]);
+
+  assert.equal(await service.getActionState('scene', { sceneName: 'Juego' }), true);
+  assert.equal(await service.getActionState('scene', { sceneName: 'Pausa' }), false);
+  assert.equal(await service.getActionState('recordToggle'), true);
+  assert.equal(await service.getActionState('recordPauseToggle'), false);
+  assert.equal(await service.getActionState('streamToggle'), true);
+  assert.equal(await service.getActionState('inputMuteToggle', { inputName: 'Mic/Aux' }), false);
+  assert.equal(await service.getActionState('sourceVisibilityToggle', { sceneItemRef: JSON.stringify(['Juego', 7]) }), true);
+  assert.equal(await service.getActionState('filterToggle', { filterRef: JSON.stringify(['Cámara', 'Chroma']) }), false);
 
   await assert.rejects(() => service.action('scene', {}), /escena.*obligatori/i);
   await assert.rejects(() => service.action('unknown'), /no compatible/i);

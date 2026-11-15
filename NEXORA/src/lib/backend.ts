@@ -109,6 +109,10 @@ export async function testObsConnection(url: string, password: string): Promise<
   return invoke<string>("test_obs_connection", { url, password });
 }
 
+export async function forgetObsConnection(): Promise<string> {
+  return invoke<string>("obs_forget_connection");
+}
+
 export async function executeObsAction(action: string, settings: Record<string, unknown> = {}): Promise<string> {
   return invoke<string>("obs_action", { action, settings });
 }

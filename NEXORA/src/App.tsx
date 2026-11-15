@@ -49,6 +49,7 @@ import {
   setDeviceMode,
   setAutoDetectDevice,
   testObsConnection,
+  forgetObsConnection,
   applyHardwareKey,
   applyHardwarePage,
   applyInitialScreen,
@@ -169,7 +170,7 @@ function AssetVisual({ assetId, alt = "" }: { assetId: string; alt?: string }) {
   return source ? <img className="asset-visual" src={source} alt={alt} loading="lazy" decoding="async" /> : <span className="asset-loading"><LoaderCircle className="spin" size={15} /></span>;
 }
 
-function DefaultActionIcon({ action, color = "#111827" }: { action?: KeyAction; color?: string }) {
+function DefaultActionIcon({ action, color = "#111827", state }: { action?: KeyAction; color?: string; state?: number }) {
   if (!action || action.kind === "none") return null;
   const labels: Record<string, string> = {
     recordToggle: "REC", recordStart: "REC", recordStop: "STOP", streamToggle: "LIVE", streamStart: "LIVE", streamStop: "OFF",
@@ -181,15 +182,17 @@ function DefaultActionIcon({ action, color = "#111827" }: { action?: KeyAction; 
   const label = (labels[action.value || ""] || fallback[action.kind] || "NX").slice(0, 5);
   const safeColor = /^#[0-9a-f]{6}$/i.test(color) ? color : "#111827";
   const fontSize = label.length > 4 ? 16 : 20;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="102" height="102" viewBox="0 0 102 102"><defs><radialGradient id="g"><stop offset="0" stop-color="${safeColor}"/><stop offset="1" stop-color="#050506"/></radialGradient></defs><rect width="102" height="102" rx="16" fill="url(#g)"/><rect x="19" y="19" width="64" height="64" rx="14" fill="none" stroke="#fff" stroke-width="4" opacity=".9"/><text x="51" y="58" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="${fontSize}" font-weight="700">${label}</text></svg>`;
+  const accent = state === 1 ? "#4ade80" : state === 0 ? "#64748b" : "#a78bfa";
+  const badge = state === 1 ? '<circle cx="76" cy="25" r="10" fill="#052e16" stroke="#4ade80" stroke-width="2"/><path d="m71 25 3 3 6-7" fill="none" stroke="#dcfce7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>' : state === 0 ? '<circle cx="76" cy="25" r="8" fill="#0f172a" stroke="#64748b" stroke-width="2"/>' : "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="102" height="102" viewBox="0 0 102 102"><defs><radialGradient id="g"><stop offset="0" stop-color="${safeColor}" stop-opacity="${state === 1 ? ".85" : ".4"}"/><stop offset="1" stop-color="#050506"/></radialGradient></defs><rect width="102" height="102" rx="16" fill="#050506"/><rect x="5" y="5" width="92" height="92" rx="14" fill="url(#g)"/><rect x="18" y="18" width="66" height="66" rx="15" fill="#08080b" fill-opacity=".5" stroke="${accent}" stroke-width="3"/><text x="51" y="59" text-anchor="middle" fill="#fff" font-family="Segoe UI,Arial,sans-serif" font-size="${fontSize}" font-weight="700">${label}</text>${badge}</svg>`;
   return <span className={`default-action-icon action-${action.kind}`}><img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`} alt="" /></span>;
 }
 
-function KeyArtwork({ assetId, image, text, alt, action, color }: { assetId?: string; image?: string; text?: string; alt: string; action?: KeyAction; state?: number; color?: string }) {
+function KeyArtwork({ assetId, image, text, alt, action, state, color }: { assetId?: string; image?: string; text?: string; alt: string; action?: KeyAction; state?: number; color?: string }) {
   const hasImage = Boolean(assetId || image);
   return <span className={`key-artwork ${hasImage ? "has-image" : ""} ${action && action.kind !== "none" ? "has-action" : ""}`}>
     {image ? <img className="asset-visual" src={image} alt={alt} loading="lazy" decoding="async" /> : assetId ? <AssetVisual assetId={assetId} alt={alt} /> : null}
-    {!hasImage && <DefaultActionIcon action={action} color={color} />}
+    {!hasImage && <DefaultActionIcon action={action} color={color} state={state} />}
     {text && <span className={hasImage ? "key-text-overlay" : "key-text-only"}>{text.trim().slice(0, 24)}</span>}
   </span>;
 }
@@ -220,13 +223,16 @@ function KeyGrid({ keys, selected, pressedKeys = new Set(), runtimeFeedback = {}
         const feedback = runtimeFeedback[key.index];
         const action = key.actions[0];
         const empty = !action || action.kind === "none";
+        const stateVisual = feedback?.state === 1 ? key.stateVisuals?.active : feedback?.state === 0 ? key.stateVisuals?.inactive : undefined;
+        const visualAssetId = feedback?.state === 1 ? stateVisual?.iconPath : feedback?.state === 0 ? (stateVisual?.iconPath ?? key.iconPath) : key.iconPath;
+        const visualColor = stateVisual?.color || key.color;
         return (
         <button
           type="button"
           key={key.index}
           draggable
-          className={`device-key ${empty ? "empty" : "configured"} ${selected === key.index ? "selected" : ""} ${pressedKeys.has(key.index) ? "pressed" : ""} ${dropTarget === key.index ? (dropInvalid ? "drop-invalid" : "drop-valid") : ""}`}
-          style={{ "--key-color": key.color } as React.CSSProperties}
+          className={`device-key ${empty ? "empty" : "configured"} ${feedback?.state === 1 ? "state-active" : feedback?.state === 0 ? "state-inactive" : ""} ${selected === key.index ? "selected" : ""} ${pressedKeys.has(key.index) ? "pressed" : ""} ${dropTarget === key.index ? (dropInvalid ? "drop-invalid" : "drop-valid") : ""}`}
+          style={{ "--key-color": visualColor } as React.CSSProperties}
           onClick={() => onSelect(key.index)}
           onDoubleClick={() => onActivate?.(key.index)}
           onDragStart={(event) => {
@@ -276,7 +282,7 @@ function KeyGrid({ keys, selected, pressedKeys = new Set(), runtimeFeedback = {}
           }}
         >
           {!empty && <span className="key-glow" />}
-          <span className="key-content"><KeyArtwork assetId={empty || feedback?.image ? undefined : key.iconPath} image={empty ? undefined : feedback?.image} text={empty ? "" : feedback?.title || key.text} alt={feedback?.title || key.name} action={empty ? undefined : action} state={feedback?.state} color={key.color} /></span>
+          <span className="key-content"><KeyArtwork assetId={empty || feedback?.image ? undefined : visualAssetId} image={empty ? undefined : feedback?.image} text={empty ? "" : feedback?.title || stateVisual?.text || key.text} alt={feedback?.title || key.name} action={empty ? undefined : action} state={feedback?.state} color={visualColor} /></span>
           {!empty && <small>{key.name}</small>}
           {feedback?.disconnected && <span className="runtime-offline">offline</span>}
         </button>
@@ -631,11 +637,12 @@ function DisplayPadPanel({
 }
 
 function IntegrationPanel({ state, selectedKey, voxoraCatalog, onRefresh, onRefreshVoxora, onAssign }: { state: BootstrapState; selectedKey: number; voxoraCatalog: VoxoraCatalog; onRefresh: () => void; onRefreshVoxora: () => Promise<VoxoraCatalog | undefined>; onAssign: (key: number, value: NativeActionDrop) => void }) {
-  const [url, setUrl] = useState("ws://127.0.0.1:4455");
+  const [url, setUrl] = useState(state.obsConnectionUrl || "ws://127.0.0.1:4455");
   const [password, setPassword] = useState("");
   const [result, setResult] = useState("");
   const [testing, setTesting] = useState(false);
   const [voxoraBusy, setVoxoraBusy] = useState(false);
+  useEffect(() => { if (state.obsConnectionUrl) setUrl(state.obsConnectionUrl); }, [state.obsConnectionUrl]);
 
   const test = async () => {
     setTesting(true);
@@ -681,10 +688,13 @@ function IntegrationPanel({ state, selectedKey, voxoraCatalog, onRefresh, onRefr
           })}</details>
         </div>
         <div className="obs-config glass-card">
-          <span className="eyebrow">OBS WEBSOCKET 5.X</span><h2>Probar conexión</h2>
+          <span className="eyebrow">OBS WEBSOCKET 5.X</span><h2>Conexión persistente</h2>
+          <p>Se cifra con Windows, se guarda localmente y NEXORA vuelve a conectar OBS de forma automática.</p>
           <label>Dirección<input value={url} onChange={(e) => setUrl(e.target.value)} /></label>
           <label>Contraseña<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="off" /></label>
           <button type="button" className="primary-button" onClick={test} disabled={testing}>{testing ? <LoaderCircle className="spin" size={17} /> : <Radio size={17} />} Conectar</button>
+          {state.obsConnectionSaved && <button type="button" className="secondary-button" onClick={() => { void forgetObsConnection().then((message) => { setResult(message); onRefresh(); }).catch((error) => setResult(error instanceof Error ? error.message : String(error))); }}><Trash2 size={15} /> Olvidar conexión</button>}
+          {state.obsConnectionSaved && <small className="saved-connection-note"><ShieldCheck size={14} /> Reconexión automática activa</small>}
           {result && <div className="connection-result">{result}</div>}
         </div>
       </div>
@@ -1051,6 +1061,16 @@ function App() {
       const event = value as { folderId?: string };
       setSelectedFolderId(event.folderId || null);
       setSelectedKey(0);
+      return;
+    }
+    if (value.type === "obs-key-state") {
+      const event = value as { keyIndex?: number; state?: number };
+      if (Number.isInteger(event.keyIndex)) {
+        setRuntimeFeedback((current) => ({
+          ...current,
+          [event.keyIndex as number]: { ...current[event.keyIndex as number], state: event.state, disconnected: false },
+        }));
+      }
       return;
     }
     if (value.type === "obs-status") {

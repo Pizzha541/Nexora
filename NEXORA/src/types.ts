@@ -103,6 +103,10 @@ export type KeyConfig = {
   text: string;
   iconPath?: string;
   animated: boolean;
+  stateVisuals?: {
+    inactive?: { iconPath?: string; text?: string; color?: string; animated?: boolean };
+    active?: { iconPath?: string; text?: string; color?: string; animated?: boolean };
+  };
   actions: KeyAction[];
 };
 
@@ -209,6 +213,8 @@ export type BootstrapState = {
   onboardingCompleted: boolean;
   autoDetectDevice: boolean;
   voxoraPaired: boolean;
+  obsConnectionUrl?: string;
+  obsConnectionSaved?: boolean;
   activeProfileId: string;
   profiles: Profile[];
   macros: MacroDefinition[];

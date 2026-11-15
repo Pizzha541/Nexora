@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, shell, Tray, utilityProcess } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, safeStorage, shell, Tray, utilityProcess } = require('electron');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -33,6 +33,10 @@ let reconnectTimer = null;
 let workerRestartTimer = null;
 let initialRestoreTimer = null;
 let screensaverTimer = null;
+let obsReconnectTimer = null;
+let obsReconnectAttempt = 0;
+let obsStateSyncTimer = null;
+const obsKeyStates = new Map();
 let screensaverActive = false;
 let shuttingDown = false;
 let backgroundNoticeShown = false;
@@ -376,6 +380,51 @@ function loadRepository() {
 
 function saveSettings(settings) { writeJson(path.join(dataRoot, 'settings.json'), settings); }
 
+function encryptObsPassword(password) {
+  const value = String(password || '');
+  if (!value) return '';
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows no permitió cifrar la contraseña de OBS.');
+  return safeStorage.encryptString(value).toString('base64');
+}
+
+function decryptObsPassword(value) {
+  if (!value) return '';
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows no permitió descifrar la contraseña guardada de OBS.');
+  return safeStorage.decryptString(Buffer.from(String(value), 'base64'));
+}
+
+function scheduleObsReconnect() {
+  if (shuttingDown || isolatedTestRun || obsReconnectTimer) return;
+  const delays = [1_000, 2_000, 5_000, 10_000, 20_000];
+  const delay = delays[Math.min(obsReconnectAttempt++, delays.length - 1)];
+  obsReconnectTimer = setTimeout(() => {
+    obsReconnectTimer = null;
+    void connectSavedObs();
+  }, delay);
+  obsReconnectTimer.unref?.();
+}
+
+async function connectSavedObs() {
+  if (!obsService || shuttingDown || isolatedTestRun) return false;
+  const repository = loadRepository();
+  const saved = repository.settings.obsConnection;
+  if (!saved?.url) return false;
+  try {
+    const password = decryptObsPassword(saved.passwordEncrypted);
+    await obsService.connect(saved.url, password);
+    obsReconnectAttempt = 0;
+    if (obsReconnectTimer) clearTimeout(obsReconnectTimer);
+    obsReconnectTimer = null;
+    appendLog('obs-reconnect', 'Conexión guardada restaurada correctamente.');
+    scheduleObsKeyStateSync(true);
+    return true;
+  } catch (error) {
+    appendLog('obs-reconnect', error?.message || String(error));
+    scheduleObsReconnect();
+    return false;
+  }
+}
+
 function validVoxoraExecutable(candidate) {
   try {
     return Boolean(candidate && path.basename(candidate).toLowerCase() === 'voxora.exe' && fs.statSync(candidate).isFile());
@@ -639,10 +688,12 @@ async function writeHardwareKey(key) {
   const repository = loadRepository();
   const action = key?.actions?.[0];
   const functional = Boolean(action && action.kind !== 'none');
-  const file = functional ? (key?.iconPath ? assetPath(key.iconPath, repository) : defaultActionIconPath(action, key?.color)) : null;
-  const visual = { key: key.index + 1, file, text: functional ? String(key.text || '') : '', color: functional ? String(key.color || '#111018') : '#000000' };
+  const state = obsKeyStates.has(key.index) ? obsKeyStates.get(key.index) : undefined;
+  const resolved = functional ? resolveKeyVisual(key, action, state, repository) : { file: null, text: '', color: '#000000', animated: false };
+  const visual = { key: key.index + 1, file: resolved.file, text: resolved.text, color: resolved.color };
+  const file = resolved.file;
   return (file || visual.text)
-    ? serialWorkerRequest(key.animated && file ? 'gifStart' : 'image', visual)
+    ? serialWorkerRequest(resolved.animated && file ? 'gifStart' : 'image', visual)
     : serialWorkerRequest('clear', { key: key.index + 1 });
 }
 
@@ -676,6 +727,7 @@ async function syncDesiredPage(repository = loadRepository()) {
   cancelPendingKeySync();
   const result = await serialWorkerRequest('page', { keys: mapHardwareKeys(activeKeys, repository) });
   if (result.ok) scheduleScreensaver(repository);
+  scheduleObsKeyStateSync(true);
   return result;
 }
 
@@ -751,7 +803,7 @@ function builtinInitialScreenPath() {
   return target;
 }
 
-function defaultActionIconPath(action, color = '#111827') {
+function defaultActionIconPath(action, color = '#111827', state) {
   if (!action || action.kind === 'none' || action.kind === 'delay') return null;
   const labels = {
     recordToggle: 'REC', recordStart: 'REC', recordStop: 'STOP', streamToggle: 'LIVE', streamStart: 'LIVE', streamStop: 'OFF',
@@ -762,15 +814,70 @@ function defaultActionIconPath(action, color = '#111827') {
   const fallback = { multiAction: 'MULTI', multiSwitch: 'SW', hotkey: 'KEY', media: 'MEDIA', profile: 'PROF', folder: 'DIR', openUrl: 'WEB', launchPath: 'APP', plugin: 'PLUG', native: 'APP', obs: 'OBS' };
   const label = String(labels[action.value] || fallback[action.kind] || 'NX').slice(0, 5);
   const safeColor = /^#[0-9a-f]{6}$/i.test(color) ? color : '#111827';
-  const signature = crypto.createHash('sha256').update(`${action.kind}:${action.value || ''}:${safeColor}:${label}`).digest('hex').slice(0, 20);
+  const stateName = state === true ? 'active' : state === false ? 'inactive' : 'neutral';
+  const signature = crypto.createHash('sha256').update(`${action.kind}:${action.value || ''}:${safeColor}:${label}:${stateName}:v2`).digest('hex').slice(0, 20);
   const directory = path.join(dataRoot, 'assets', 'action-icons');
   const target = path.join(directory, `${signature}.svg`);
   if (!fs.existsSync(target)) {
     fs.mkdirSync(directory, { recursive: true });
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="102" height="102" viewBox="0 0 102 102"><defs><radialGradient id="g"><stop offset="0" stop-color="${safeColor}"/><stop offset="1" stop-color="#050506"/></radialGradient></defs><rect width="102" height="102" rx="16" fill="url(#g)"/><rect x="19" y="19" width="64" height="64" rx="14" fill="none" stroke="#fff" stroke-width="4" opacity=".9"/><text x="51" y="58" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="${label.length > 4 ? 16 : 20}" font-weight="700">${label}</text></svg>`;
+    const accent = state === true ? '#4ade80' : state === false ? '#64748b' : '#a78bfa';
+    const glow = state === true ? '.85' : '.32';
+    const badge = state === true
+      ? '<circle cx="76" cy="25" r="10" fill="#052e16" stroke="#4ade80" stroke-width="2"/><path d="m71 25 3 3 6-7" fill="none" stroke="#dcfce7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
+      : state === false ? '<circle cx="76" cy="25" r="8" fill="#0f172a" stroke="#64748b" stroke-width="2"/>' : '';
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="102" height="102" viewBox="0 0 102 102"><defs><radialGradient id="g"><stop offset="0" stop-color="${safeColor}" stop-opacity="${glow}"/><stop offset="1" stop-color="#050506"/></radialGradient><filter id="s"><feGaussianBlur stdDeviation="3"/></filter></defs><rect width="102" height="102" rx="16" fill="#050506"/><rect x="5" y="5" width="92" height="92" rx="14" fill="url(#g)"/><rect x="18" y="18" width="66" height="66" rx="15" fill="#08080b" fill-opacity=".5" stroke="${accent}" stroke-width="3"/><text x="51" y="59" text-anchor="middle" fill="#fff" font-family="Segoe UI,Arial,sans-serif" font-size="${label.length > 4 ? 15 : 20}" font-weight="700">${label}</text>${badge}</svg>`;
     fs.writeFileSync(target, svg, 'utf8');
   }
   return target;
+}
+
+const OBS_STATEFUL_ACTIONS = new Set(['scene', 'recordToggle', 'recordPauseToggle', 'streamToggle', 'virtualCameraToggle', 'replayBufferToggle', 'studioModeToggle', 'inputMuteToggle', 'sourceVisibilityToggle', 'filterToggle']);
+
+function resolveKeyVisual(key, action, state, repository = loadRepository()) {
+  const stateVisual = typeof state === 'boolean' ? key?.stateVisuals?.[state ? 'active' : 'inactive'] : undefined;
+  const iconId = stateVisual?.iconPath || (state === false ? key?.iconPath : undefined) || (typeof state !== 'boolean' ? key?.iconPath : undefined);
+  const file = iconId ? assetPath(iconId, repository) : defaultActionIconPath(action, stateVisual?.color || key?.color, state);
+  return {
+    file,
+    text: String(stateVisual?.text ?? key?.text ?? ''),
+    color: String(stateVisual?.color || key?.color || '#111018'),
+    animated: Boolean(stateVisual?.animated ?? (iconId === key?.iconPath ? key?.animated : repository.assets.find((asset) => asset.id === iconId)?.animated)),
+  };
+}
+
+async function applyObsKeyState(key, state, repository = loadRepository()) {
+  obsKeyStates.set(key.index, state);
+  const visual = resolveKeyVisual(key, key.actions?.[0], state, repository);
+  sendEvent({ type: 'obs-key-state', keyIndex: key.index, state: state ? 1 : 0 });
+  if (!workerConnected || repository.settings.deviceMode !== 'hardware') return;
+  const payload = { key: key.index + 1, file: visual.file, text: visual.text, color: visual.color };
+  const result = visual.file || visual.text
+    ? await serialWorkerRequest(visual.animated && visual.file ? 'gifStart' : 'image', payload)
+    : await serialWorkerRequest('clear', { key: key.index + 1 });
+  if (!result.ok) appendLog('obs-state-usb', result.error);
+}
+
+async function syncObsKeyStates(force = false) {
+  if (!obsService?.connected || !activeKeys) return;
+  const repository = loadRepository();
+  await Promise.all(activeKeys.map(async (key) => {
+    const action = key?.actions?.[0];
+    if (action?.kind !== 'obs' || !OBS_STATEFUL_ACTIONS.has(action.value)) return;
+    try {
+      const state = await obsService.getActionState(action.value, action.settings || {});
+      if (typeof state !== 'boolean') return;
+      if (force || obsKeyStates.get(key.index) !== state) await applyObsKeyState(key, state, repository);
+    } catch (error) { appendLog('obs-state', `${action.value}: ${error.message}`); }
+  }));
+}
+
+function scheduleObsKeyStateSync(force = false) {
+  if (obsStateSyncTimer) clearTimeout(obsStateSyncTimer);
+  obsStateSyncTimer = setTimeout(() => {
+    obsStateSyncTimer = null;
+    void syncObsKeyStates(force);
+  }, 90);
+  obsStateSyncTimer.unref?.();
 }
 
 function mapHardwareKeys(keys, repository = loadRepository()) {
@@ -778,10 +885,9 @@ function mapHardwareKeys(keys, repository = loadRepository()) {
     const key = keys[index] || {};
     const action = key.actions?.[0];
     const functional = Boolean(action && action.kind !== 'none');
-    return {
-      file: functional ? (key.iconPath ? assetPath(key.iconPath, repository) : defaultActionIconPath(action, key.color)) : null,
-      animated: functional && Boolean(key.animated), text: functional ? String(key.text || '') : '', color: functional ? String(key.color || '#111018') : '#000000',
-    };
+    const state = obsKeyStates.has(index) ? obsKeyStates.get(index) : undefined;
+    const visual = functional ? resolveKeyVisual(key, action, state, repository) : { file: null, animated: false, text: '', color: '#000000' };
+    return { file: visual.file, animated: visual.animated, text: visual.text, color: visual.color };
   });
 }
 
@@ -919,6 +1025,8 @@ async function executeAction(action, keyIndex, depth = 0) {
       const nextState = currentState === 0 ? 1 : 0;
       multiSwitchStates.set(switchKey, nextState);
       sendEvent({ type: 'plugin-feedback', event: 'setState', keyIndex, payload: { state: nextState } });
+      const key = activeKeys?.[keyIndex];
+      if (key) await applyObsKeyState(key, nextState === 1);
     }
     return;
   }
@@ -938,10 +1046,16 @@ async function executeAction(action, keyIndex, depth = 0) {
     sendMediaKey(action.value);
   } else if (action.kind === 'native') {
     await executeNativeAction(action.value, action.settings || {});
+    if (action.value === 'voxora.muteToggle') {
+      const key = activeKeys?.[keyIndex];
+      const nextState = !Boolean(obsKeyStates.get(keyIndex));
+      if (key) await applyObsKeyState(key, nextState);
+    }
   } else if (action.kind === 'plugin') {
     await pluginService.execute(action.pluginId, action.actionId, action.settings || {}, action.contextId, keyIndex);
   } else if (action.kind === 'obs') {
     await obsService.action(action.value, action.settings || {});
+    scheduleObsKeyStateSync();
   } else if (action.kind === 'profile') {
     const repository = loadRepository();
     const profile = repository.profiles.find((item) => item.id === action.value);
@@ -949,6 +1063,7 @@ async function executeAction(action, keyIndex, depth = 0) {
     repository.settings.activeProfileId = profile.id;
     saveSettings(repository.settings);
     activeKeys = structuredClone(profile.keys);
+    obsKeyStates.clear();
     await syncDesiredPage(repository);
     sendEvent({ type: 'navigate-profile', profileId: profile.id });
   } else if (action.kind === 'folder') {
@@ -957,6 +1072,7 @@ async function executeAction(action, keyIndex, depth = 0) {
     const folder = findFolderById(profile?.folders, action.value);
     if (!folder) throw new Error('Carpeta no encontrada.');
     activeKeys = structuredClone(folder.keys);
+    obsKeyStates.clear();
     await syncDesiredPage(repository);
     sendEvent({ type: 'navigate-folder', folderId: folder.id });
   } else {
@@ -992,6 +1108,8 @@ async function invoke(command, args) {
       onboardingCompleted: Boolean(repository.settings.onboardingCompleted),
       autoDetectDevice: repository.settings.autoDetectDevice !== false,
       voxoraPaired: repository.settings.voxoraPaired === true,
+      obsConnectionUrl: repository.settings.obsConnection?.url || 'ws://127.0.0.1:4455',
+      obsConnectionSaved: Boolean(repository.settings.obsConnection?.url),
       visualSettings: repository.settings.visualSettings, startupWarning: undefined,
       device: mode === 'simulation'
         ? { connected: true, mode, name: 'DisplayPad simulado' }
@@ -1243,12 +1361,14 @@ async function invoke(command, args) {
   if (command === 'plugin_read_icon') return pluginService.icon(args.pluginId);
   if (command === 'hardware_apply_page') {
     activeKeys = structuredClone(args.keys || []);
+    obsKeyStates.clear();
     cancelPendingKeySync();
     if (!workerConnected) return 'Página guardada; se enviará al reconectar el DisplayPad.';
     const result = await serialWorkerRequest('page', { keys: mapHardwareKeys(activeKeys, repository) });
     if (!result.ok) throw new Error(result.error);
     screensaverActive = false;
     scheduleScreensaver(repository);
+    scheduleObsKeyStateSync(true);
     return 'Página enviada a las doce teclas.';
   }
   if (command === 'hardware_apply_key') {
@@ -1271,8 +1391,33 @@ async function invoke(command, args) {
     initialRestoreTimer.unref();
     return `Initial Screen enviada; la página activa volverá en ${repository.settings.visualSettings.initialDurationSeconds || 5} segundos.`;
   }
-  if (command === 'test_obs_connection' || command === 'obs_connect') return obsService.connect(args.url, args.password || '');
-  if (command === 'obs_action') { await obsService.action(args.action, args.settings || {}); return 'Acción enviada a OBS.'; }
+  if (command === 'test_obs_connection' || command === 'obs_connect') {
+    const url = String(args.url || '').trim();
+    const password = String(args.password || '');
+    const message = await obsService.connect(url, password);
+    repository.settings.obsConnection = {
+      url,
+      passwordEncrypted: encryptObsPassword(password),
+      savedAt: new Date().toISOString(),
+    };
+    saveSettings(repository.settings);
+    obsReconnectAttempt = 0;
+    if (obsReconnectTimer) clearTimeout(obsReconnectTimer);
+    obsReconnectTimer = null;
+    scheduleObsKeyStateSync(true);
+    return `${message} Conexión cifrada y guardada para el próximo inicio.`;
+  }
+  if (command === 'obs_forget_connection') {
+    delete repository.settings.obsConnection;
+    saveSettings(repository.settings);
+    if (obsReconnectTimer) clearTimeout(obsReconnectTimer);
+    obsReconnectTimer = null;
+    obsReconnectAttempt = 0;
+    obsKeyStates.clear();
+    obsService.disconnect();
+    return 'Conexión guardada de OBS eliminada.';
+  }
+  if (command === 'obs_action') { await obsService.action(args.action, args.settings || {}); scheduleObsKeyStateSync(); return 'Acción enviada a OBS.'; }
   if (command === 'obs_get_scenes') return obsService.getScenes();
   if (command === 'obs_get_catalog') return obsService.getCatalog();
   if (command === 'apply_key_config') return null;
@@ -1370,7 +1515,17 @@ app.whenReady().then(() => {
     runtimeStatus: (value) => sendEvent({ type: 'plugin-runtime-status', ...value }),
     openExternal: (url) => shell.openExternal(url),
   });
-  obsService = new ObsService({ onEvent: sendEvent, log: appendLog });
+  obsService = new ObsService({
+    onEvent: (value) => {
+      sendEvent(value);
+      if (value?.type === 'obs-status') {
+        if (value.connected) scheduleObsKeyStateSync(true);
+        else scheduleObsReconnect();
+      } else if (value?.type === 'obs-event') scheduleObsKeyStateSync();
+    },
+    log: appendLog,
+  });
+  void connectSavedObs();
   voxoraService = new VoxoraService({
     localAppData: windowsLocalData,
     onEvent: sendEvent,
@@ -1442,5 +1597,5 @@ app.on('second-instance', () => {
   showMainWindow();
 });
 app.on('activate', showMainWindow);
-app.on('before-quit', () => { shuttingDown = true; if (reconnectTimer) clearTimeout(reconnectTimer); if (workerRestartTimer) clearTimeout(workerRestartTimer); for (const timer of longPressTimers.values()) clearTimeout(timer); longPressTimers.clear(); multiSwitchStates.clear(); for (const inspector of propertyInspectorWindows.values()) inspector.destroy(); propertyInspectorWindows.clear(); pluginService?.stopAll(); obsService?.disconnect(); voxoraService?.stop(); if (worker?.pid) { void workerRequest('shutdown', {}, 1000); setTimeout(() => worker?.kill(), 1100).unref(); } });
+app.on('before-quit', () => { shuttingDown = true; if (reconnectTimer) clearTimeout(reconnectTimer); if (workerRestartTimer) clearTimeout(workerRestartTimer); if (obsReconnectTimer) clearTimeout(obsReconnectTimer); if (obsStateSyncTimer) clearTimeout(obsStateSyncTimer); for (const timer of longPressTimers.values()) clearTimeout(timer); longPressTimers.clear(); multiSwitchStates.clear(); obsKeyStates.clear(); for (const inspector of propertyInspectorWindows.values()) inspector.destroy(); propertyInspectorWindows.clear(); pluginService?.stopAll(); obsService?.disconnect(); voxoraService?.stop(); if (worker?.pid) { void workerRequest('shutdown', {}, 1000); setTimeout(() => worker?.kill(), 1100).unref(); } });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' && (shuttingDown || !tray)) app.quit(); });
