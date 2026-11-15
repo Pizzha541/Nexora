@@ -94,7 +94,7 @@ export const NATIVE_PLUGINS: NativePluginDefinition[] = [
         { key: "volume", label: "Volumen", type: "number", min: 0, max: 1, step: 0.05 },
       ] },
       { id: "clipboard", name: "Hablar portapapeles", description: "Lee el portapapeles desde VOXORA sin copiar su contenido a NEXORA", kind: "native", value: "voxora.speakClipboard", settings: { queueBehavior: "append" }, fields: [{ key: "queueBehavior", label: "Cola", type: "select", options: [{ value: "append", label: "Añadir" }, { value: "replace", label: "Reemplazar" }, { value: "interrupt", label: "Interrumpir" }] }] },
-      { id: "mute-toggle", name: "Silenciar / activar VOXORA", description: "Alterna el audio con una pulsación y restaura el volumen anterior", kind: "native", value: "voxora.muteToggle" },
+      { id: "mute-toggle", name: "TTS ON / OFF", description: "Activa o desactiva la lectura TTS global real de VOXORA con una pulsación", kind: "native", value: "voxora.muteToggle" },
       { id: "pause", name: "Pausar", description: "Pausa reproducción y cola", kind: "native", value: "voxora.pause" },
       { id: "resume", name: "Continuar", description: "Continúa reproducción y cola", kind: "native", value: "voxora.resume" },
       { id: "stop", name: "Detener", description: "Detiene la frase actual y deja la cola pausada", kind: "native", value: "voxora.stop" },

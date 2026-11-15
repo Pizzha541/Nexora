@@ -49,8 +49,8 @@ class VoxoraService {
     this.reconnectTimer = null;
     this.reconnectAttempt = 0;
     this.stopped = false;
-    this.lastAudibleVolume = 1;
     this.muteTogglePromise = Promise.resolve();
+    this.ttsEnabled = null;
     this.launchAttempted = false;
     this.discoveryFingerprint = '';
   }
@@ -161,6 +161,8 @@ class VoxoraService {
     const [health, voiceResult, settingResult, statusResult] = await Promise.all([
       this.request('/api/v1/health'), this.request('/api/v1/voices'), this.request('/api/v1/settings'), this.request('/api/v1/status'),
     ]);
+    const ttsEnabled = typeof statusResult.status?.ttsEnabled === 'boolean' ? statusResult.status.ttsEnabled : null;
+    if (typeof ttsEnabled === 'boolean') this.ttsEnabled = ttsEnabled;
     return {
       protocolVersion: health.protocolVersion,
       voxoraVersion: health.voxoraVersion,
@@ -172,19 +174,25 @@ class VoxoraService {
     };
   }
 
+  async getTtsEnabled() {
+    const result = await this.request('/api/v1/status');
+    const enabled = result.status?.ttsEnabled;
+    if (typeof enabled !== 'boolean') throw new Error('Esta versión de VOXORA no expone el interruptor TTS. Actualiza VOXORA para usar TTS ON/OFF desde NEXORA.');
+    this.ttsEnabled = enabled;
+    return enabled;
+  }
+
   async action(value, settings = {}) {
     const id = requestId(settings.requestId);
     if (value === 'voxora.muteToggle') {
       const pending = this.muteTogglePromise.then(async () => {
-        const result = await this.request('/api/v1/settings');
-        const currentVolume = Number(result.settings?.volume);
-        const audibleVolume = Number.isFinite(currentVolume) && currentVolume > 0
-          ? Math.min(1, currentVolume)
-          : Math.min(1, Math.max(0.05, this.lastAudibleVolume || 1));
-        const nextVolume = Number.isFinite(currentVolume) && currentVolume > 0 ? 0 : audibleVolume;
-        if (nextVolume === 0) this.lastAudibleVolume = audibleVolume;
-        await this.request('/api/v1/settings', { method: 'POST', body: { requestId: id, volume: nextVolume } });
-        return nextVolume === 0 ? 'VOXORA silenciado.' : `VOXORA activado · volumen ${Math.round(nextVolume * 100)}%.`;
+        const current = await this.getTtsEnabled();
+        const operation = current ? 'ttsDisable' : 'ttsEnable';
+        const result = await this.request('/api/v1/control', { method: 'POST', body: { requestId: id, operation } });
+        const enabled = typeof result.ttsEnabled === 'boolean' ? result.ttsEnabled : !current;
+        this.ttsEnabled = enabled;
+        this.onEvent({ type: 'voxora-tts-state', enabled });
+        return enabled ? 'VOXORA TTS activado.' : 'VOXORA TTS desactivado.';
       });
       this.muteTogglePromise = pending.catch(() => undefined);
       return pending;
@@ -252,6 +260,11 @@ class VoxoraService {
     socket.on('message', (data) => {
       try {
         const payload = JSON.parse(String(data));
+        const enabled = payload.type === 'ready' ? (payload.ttsEnabled ?? payload.status?.ttsEnabled) : payload.type === 'ttsStateChanged' ? payload.enabled : undefined;
+        if (typeof enabled === 'boolean') {
+          this.ttsEnabled = enabled;
+          this.onEvent({ type: 'voxora-tts-state', enabled });
+        }
         this.onEvent({ type: 'voxora-event', event: payload.type, payload });
       } catch {}
     });

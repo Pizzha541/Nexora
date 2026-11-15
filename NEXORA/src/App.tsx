@@ -176,7 +176,7 @@ function DefaultActionIcon({ action, color = "#111827", state }: { action?: KeyA
     recordToggle: "REC", recordStart: "REC", recordStop: "STOP", streamToggle: "LIVE", streamStart: "LIVE", streamStop: "OFF",
     scene: "SCN", previewScene: "PREV", virtualCameraToggle: "CAM", replayBufferToggle: "RPL", replayBufferSave: "SAVE",
     studioModeToggle: "STD", sourceVisibilityToggle: "EYE", inputMuteToggle: "MIC", screenshot: "SHOT", transition: "FX", filterToggle: "FLT",
-    "voxora.muteToggle": "MUTE",
+    "voxora.muteToggle": "TTS",
   };
   const fallback: Partial<Record<KeyAction["kind"], string>> = { multiAction: "MULTI", multiSwitch: "SW", hotkey: "KEY", media: "MEDIA", profile: "PROF", folder: "DIR", openUrl: "WEB", launchPath: "APP", plugin: "PLUG", native: "APP", obs: "OBS" };
   const label = (labels[action.value || ""] || fallback[action.kind] || "NX").slice(0, 5);
@@ -1070,6 +1070,22 @@ function App() {
           ...current,
           [event.keyIndex as number]: { ...current[event.keyIndex as number], state: event.state, disconnected: false },
         }));
+      }
+      return;
+    }
+    if (value.type === "voxora-tts-state") {
+      const event = value as { enabled?: boolean };
+      if (typeof event.enabled === "boolean") {
+        const snapshot = stateRef.current;
+        const profile = snapshot?.profiles.find((item) => item.id === snapshot.activeProfileId);
+        const visibleKeys = profile ? keysForPage(profile, selectedFolderId) : [];
+        setRuntimeFeedback((current) => {
+          const next = { ...current };
+          visibleKeys.forEach((key) => {
+            if (key.actions[0]?.kind === "native" && key.actions[0]?.value === "voxora.muteToggle") next[key.index] = { ...next[key.index], state: event.enabled ? 1 : 0, disconnected: false };
+          });
+          return next;
+        });
       }
       return;
     }

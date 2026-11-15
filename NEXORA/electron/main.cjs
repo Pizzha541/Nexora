@@ -728,6 +728,7 @@ async function syncDesiredPage(repository = loadRepository()) {
   const result = await serialWorkerRequest('page', { keys: mapHardwareKeys(activeKeys, repository) });
   if (result.ok) scheduleScreensaver(repository);
   scheduleObsKeyStateSync(true);
+  void syncVoxoraTtsState(true);
   return result;
 }
 
@@ -809,7 +810,7 @@ function defaultActionIconPath(action, color = '#111827', state) {
     recordToggle: 'REC', recordStart: 'REC', recordStop: 'STOP', streamToggle: 'LIVE', streamStart: 'LIVE', streamStop: 'OFF',
     scene: 'SCN', previewScene: 'PREV', virtualCameraToggle: 'CAM', replayBufferToggle: 'RPL', replayBufferSave: 'SAVE',
     studioModeToggle: 'STD', sourceVisibilityToggle: 'EYE', inputMuteToggle: 'MIC', screenshot: 'SHOT', transition: 'FX', filterToggle: 'FLT',
-    'voxora.muteToggle': 'MUTE',
+    'voxora.muteToggle': 'TTS',
   };
   const fallback = { multiAction: 'MULTI', multiSwitch: 'SW', hotkey: 'KEY', media: 'MEDIA', profile: 'PROF', folder: 'DIR', openUrl: 'WEB', launchPath: 'APP', plugin: 'PLUG', native: 'APP', obs: 'OBS' };
   const label = String(labels[action.value] || fallback[action.kind] || 'NX').slice(0, 5);
@@ -868,6 +869,23 @@ async function syncObsKeyStates(force = false) {
       if (typeof state !== 'boolean') return;
       if (force || obsKeyStates.get(key.index) !== state) await applyObsKeyState(key, state, repository);
     } catch (error) { appendLog('obs-state', `${action.value}: ${error.message}`); }
+  }));
+}
+
+async function syncVoxoraTtsState(force = false, confirmedState) {
+  if (!voxoraService || !activeKeys) return;
+  let enabled = confirmedState;
+  try {
+    if (typeof enabled !== 'boolean') enabled = await voxoraService.getTtsEnabled();
+  } catch (error) {
+    appendLog('voxora-tts-state', error.message);
+    return;
+  }
+  const repository = loadRepository();
+  await Promise.all(activeKeys.map(async (key) => {
+    const action = key?.actions?.[0];
+    if (action?.kind !== 'native' || action.value !== 'voxora.muteToggle') return;
+    if (force || obsKeyStates.get(key.index) !== enabled) await applyObsKeyState(key, enabled, repository);
   }));
 }
 
@@ -1047,9 +1065,7 @@ async function executeAction(action, keyIndex, depth = 0) {
   } else if (action.kind === 'native') {
     await executeNativeAction(action.value, action.settings || {});
     if (action.value === 'voxora.muteToggle') {
-      const key = activeKeys?.[keyIndex];
-      const nextState = !Boolean(obsKeyStates.get(keyIndex));
-      if (key) await applyObsKeyState(key, nextState);
+      await syncVoxoraTtsState(true, voxoraService.ttsEnabled);
     }
   } else if (action.kind === 'plugin') {
     await pluginService.execute(action.pluginId, action.actionId, action.settings || {}, action.contextId, keyIndex);
@@ -1528,7 +1544,11 @@ app.whenReady().then(() => {
   void connectSavedObs();
   voxoraService = new VoxoraService({
     localAppData: windowsLocalData,
-    onEvent: sendEvent,
+    onEvent: (value) => {
+      sendEvent(value);
+      if (value?.type === 'voxora-tts-state' && typeof value.enabled === 'boolean') void syncVoxoraTtsState(false, value.enabled);
+      else if (value?.type === 'voxora-status' && value.status === 'connected') void syncVoxoraTtsState(true);
+    },
     log: appendLog,
     shouldAutoLaunch: () => !isolatedTestRun && loadRepository().settings.voxoraPaired === true,
     launch: launchPairedVoxora,

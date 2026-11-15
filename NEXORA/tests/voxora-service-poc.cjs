@@ -17,12 +17,13 @@ async function main() {
   }));
   const calls = [];
   let currentVolume = 0.72;
+  let ttsEnabled = true;
   let discovered = 0;
   const responses = {
     '/api/v1/health': { ok: true, voxoraVersion: '0.12.0', protocolVersion: '1.0', engine: { ready: true, state: 'idle' }, capabilities: { speak: true } },
     '/api/v1/voices': { ok: true, voices: [{ id: 'voice-1', name: 'Helena', language: 'es-ES', engine: 'microsoft' }] },
     '/api/v1/settings': { ok: true, settings: { voiceId: 'voice-1', rate: 1, pitch: 1, volume: 1 } },
-    '/api/v1/status': { ok: true, status: { state: 'idle', queueLength: 0 } },
+    '/api/v1/status': { ok: true, status: { state: 'idle', queueLength: 0, ttsEnabled: true } },
     '/api/v1/speak': { ok: true, itemId: 'item-1', queueLength: 1 },
     '/api/v1/control': { ok: true },
   };
@@ -36,6 +37,13 @@ async function main() {
       if (url.pathname === '/api/v1/settings') {
         if ((options.method || 'GET') === 'POST' && body?.volume !== undefined) currentVolume = body.volume;
         return { ok: true, status: 200, json: async () => ({ ok: true, settings: { voiceId: 'voice-1', rate: 1, pitch: 1, volume: currentVolume } }) };
+      }
+      if (url.pathname === '/api/v1/status') return { ok: true, status: 200, json: async () => ({ ok: true, status: { state: 'idle', queueLength: 0, ttsEnabled } }) };
+      if (url.pathname === '/api/v1/control' && body?.operation?.startsWith('tts')) {
+        if (body.operation === 'ttsEnable') ttsEnabled = true;
+        else if (body.operation === 'ttsDisable') ttsEnabled = false;
+        else ttsEnabled = !ttsEnabled;
+        return { ok: true, status: 200, json: async () => ({ ok: true, ttsEnabled }) };
       }
       return { ok: true, status: 200, json: async () => responses[url.pathname] };
     },
@@ -52,9 +60,10 @@ async function main() {
     assert.equal(calls.at(-1).body.priority, 20);
     await service.action('voxora.pause');
     assert.equal(calls.at(-1).body.operation, 'pause');
-    assert.match(await service.action('voxora.muteToggle'), /silenciado/i);
-    assert.equal(currentVolume, 0);
+    assert.match(await service.action('voxora.muteToggle'), /desactivado/i);
+    assert.equal(ttsEnabled, false);
     assert.match(await service.action('voxora.muteToggle'), /activado/i);
+    assert.equal(ttsEnabled, true);
     assert.equal(currentVolume, 0.72);
     assert.equal(discovered, 1);
     await assert.rejects(() => service.action('voxora.speak', { text: 'x'.repeat(501) }), /500/);
