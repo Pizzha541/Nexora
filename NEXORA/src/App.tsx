@@ -659,7 +659,7 @@ function IntegrationPanel({ state, selectedKey, voxoraCatalog, onRefresh, onRefr
 
   return (
     <div className="section-stack">
-      <div className="section-title"><span><em>01</em> Integraciones independientes</span><h1>Conecta tu flujo</h1><p>OBS y VOXORA funcionan mediante protocolos locales. NEXORA descubre VOXORA automáticamente y nunca muestra ni registra su token.</p></div>
+      <div className="section-title"><span><em>01</em> Integraciones independientes</span><h1>Conecta tu flujo</h1><p>OBS y VOXORA funcionan mediante protocolos locales. VOXORA se empareja una sola vez y después se abre y sincroniza automáticamente con NEXORA, sin mostrar ni guardar su token.</p></div>
       <div className="integration-layout" data-tour="integrations">
         <div className="integration-list">
           {state.integrations.map((integration) => (
@@ -674,7 +674,7 @@ function IntegrationPanel({ state, selectedKey, voxoraCatalog, onRefresh, onRefr
             const needsConfiguration = Boolean(action.fields?.some((field) => field.required && !action.settings?.[field.key]));
             return <div className="native-action-row" draggable key={action.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(NEXORA_NATIVE_ACTION_MIME, JSON.stringify(payload)); }}><span><strong>{action.name}</strong>{action.fields?.length ? <small>Configurable</small> : null}</span><button type="button" className="secondary-button" onClick={() => { onAssign(selectedKey, payload); setResult(`“${action.name}” asignada. Configúrala en DisplayPad.`); }}>Tecla {selectedKey + 1}</button><button type="button" className="secondary-button" disabled={state.integrations[0]?.status !== "connected" || needsConfiguration} onClick={() => { void executeObsAction(action.value, action.settings).then(setResult).catch((error) => setResult(error instanceof Error ? error.message : String(error))); }}><Play size={14} /> Probar</button></div>;
           })}</details>
-          <details className="glass-card obs-action-library integration-actions" open={voxoraConnected}><summary><div><span className="eyebrow">ACCIONES VOXORA</span><h2>Cola TTS local real</h2></div><ChevronRight size={17} /></summary><p>{voxoraCatalog.voices.length ? `${voxoraCatalog.voices.length} voces disponibles · motor ${voxoraCatalog.engine.state}.` : "Abre VOXORA 0.12.0 y pulsa Detectar."}</p><button type="button" className="secondary-button" onClick={() => void detectVoxora()} disabled={voxoraBusy}>{voxoraBusy ? <LoaderCircle className="spin" size={15} /> : <PlugZap size={15} />} Detectar VOXORA</button>{voxoraActions.map((action) => {
+          <details className="glass-card obs-action-library integration-actions" open={voxoraConnected}><summary><div><span className="eyebrow">ACCIONES VOXORA</span><h2>Cola TTS local real</h2></div><ChevronRight size={17} /></summary><p>{voxoraCatalog.voices.length ? `${voxoraCatalog.voices.length} voces disponibles · motor ${voxoraCatalog.engine.state} · sincronización automática activa.` : state.voxoraPaired ? "Emparejamiento guardado. NEXORA abrirá y reconectará VOXORA automáticamente." : "Abre VOXORA una sola vez; NEXORA lo detectará y guardará el emparejamiento automáticamente."}</p><button type="button" className="secondary-button" onClick={() => void detectVoxora()} disabled={voxoraBusy || voxoraConnected}>{voxoraBusy ? <LoaderCircle className="spin" size={15} /> : <PlugZap size={15} />} {voxoraConnected ? "Sincronizado" : state.voxoraPaired ? "Reintentar ahora" : "Emparejar ahora"}</button>{voxoraActions.map((action) => {
             const payload: NativeActionDrop = { kind: "native", value: action.value, name: action.name, settings: action.settings };
             const needsConfiguration = Boolean(action.fields?.some((field) => field.required && !action.settings?.[field.key]));
             return <div className="native-action-row" draggable key={action.id} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(NEXORA_NATIVE_ACTION_MIME, JSON.stringify(payload)); }}><span><strong>{action.name}</strong>{action.fields?.length ? <small>Configurable</small> : null}</span><button type="button" className="secondary-button" onClick={() => { onAssign(selectedKey, payload); setResult(`“${action.name}” asignada. Configúrala en DisplayPad.`); }}>Tecla {selectedKey + 1}</button><button type="button" className="secondary-button" disabled={!voxoraConnected || needsConfiguration} onClick={() => { void executeVoxoraAction(action.value, action.settings).then(setResult).catch((error) => setResult(error instanceof Error ? error.message : String(error))); }}><Play size={14} /> Probar</button></div>;
@@ -936,7 +936,18 @@ function App() {
     if (state) window.nexoraDesktop?.ready();
   }, [state]);
   useEffect(() => window.nexoraDesktop?.onEvent((value) => {
-    if (!value || typeof value !== "object" || !("type" in value) || value.type !== "plugin-feedback") return;
+    if (!value || typeof value !== "object" || !("type" in value)) return;
+    if (value.type === "voxora-status" || value.type === "voxora-paired") {
+      void getBootstrapState().then(setState).catch(() => undefined);
+      const voxoraEvent = value as { status?: string };
+      if (value.type === "voxora-paired" || voxoraEvent.status === "connected") {
+        void loadVoxoraCatalog();
+        setPluginNotice(value.type === "voxora-paired" ? "VOXORA quedó emparejado y se conectará automáticamente." : "VOXORA sincronizado automáticamente.");
+        window.setTimeout(() => setPluginNotice(""), 4000);
+      }
+      return;
+    }
+    if (value.type !== "plugin-feedback") return;
     const feedback = value as { event?: string; keyIndex?: number; payload?: { title?: string; image?: string; state?: number } };
     if (Number.isInteger(feedback.keyIndex) && feedback.keyIndex !== undefined) {
       setRuntimeFeedback((current) => ({
@@ -953,7 +964,7 @@ function App() {
     const label = feedback.event === "setTitle" && feedback.payload?.title ? `Título: ${feedback.payload.title.replaceAll("\n", " · ")}` : feedback.event || "actualización";
     setPluginNotice(`Plugin · tecla ${(feedback.keyIndex ?? 0) + 1} · ${label}`);
     window.setTimeout(() => setPluginNotice(""), 3500);
-  }), []);
+  }), [loadVoxoraCatalog]);
 
   const flushProfileSaves = useCallback(async () => {
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);

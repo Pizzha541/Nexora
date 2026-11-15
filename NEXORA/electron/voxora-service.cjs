@@ -41,6 +41,9 @@ class VoxoraService {
       : options.webSocketFactory;
     this.onEvent = options.onEvent || (() => {});
     this.log = options.log || (() => {});
+    this.shouldAutoLaunch = options.shouldAutoLaunch || (() => false);
+    this.launch = options.launch || (async () => false);
+    this.onDiscovered = options.onDiscovered || (() => {});
     this.socket = null;
     this.socketFingerprint = '';
     this.reconnectTimer = null;
@@ -48,6 +51,8 @@ class VoxoraService {
     this.stopped = false;
     this.lastAudibleVolume = 1;
     this.muteTogglePromise = Promise.resolve();
+    this.launchAttempted = false;
+    this.discoveryFingerprint = '';
   }
 
   async readDiscovery() {
@@ -89,6 +94,7 @@ class VoxoraService {
       try { body = await response.json(); }
       catch { throw new Error(`VOXORA devolvió una respuesta inválida (${response.status}).`); }
       if (!response.ok || !body?.ok) throw new Error(`${body?.code || `HTTP_${response.status}`}: ${body?.message || 'Error de VOXORA'}`);
+      this.notifyDiscovered(discovery);
       this.ensureEventSocket(discovery);
       return body;
     } catch (error) {
@@ -96,6 +102,45 @@ class VoxoraService {
       throw error;
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  notifyDiscovered(discovery) {
+    const fingerprint = `${discovery.httpBaseUrl}|${discovery.pid}|${discovery.updatedAt}`;
+    if (fingerprint === this.discoveryFingerprint) return;
+    this.discoveryFingerprint = fingerprint;
+    Promise.resolve(this.onDiscovered(discovery)).catch((error) => this.log('voxora-pairing', error?.message || String(error)));
+  }
+
+  async probe() {
+    await this.request('/api/v1/health', { timeoutMs: 2_500 });
+    this.reconnectAttempt = 0;
+    return true;
+  }
+
+  async connectNow(options = {}) {
+    try {
+      await this.probe();
+      return { connected: true, launched: false };
+    } catch (error) {
+      let paired = false;
+      try { paired = Boolean(await this.shouldAutoLaunch()); } catch {}
+      const canLaunch = options.allowLaunch !== false && paired && (!this.launchAttempted || options.forceLaunch === true);
+      if (canLaunch) {
+        this.launchAttempted = true;
+        try {
+          const launched = Boolean(await this.launch());
+          if (launched) {
+            this.onEvent({ type: 'voxora-status', status: 'starting' });
+            this.scheduleReconnect(750);
+            return { connected: false, launched: true };
+          }
+        } catch (launchError) {
+          this.log('voxora-launch', launchError?.message || String(launchError));
+        }
+      }
+      this.scheduleReconnect();
+      return { connected: false, launched: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -218,20 +263,20 @@ class VoxoraService {
     });
   }
 
-  scheduleReconnect() {
+  scheduleReconnect(preferredDelay) {
     if (this.stopped || this.reconnectTimer || !this.webSocketFactory) return;
     const delays = [1_000, 2_000, 5_000, 10_000, 20_000];
-    const delay = delays[Math.min(this.reconnectAttempt++, delays.length - 1)];
+    const delay = Number.isFinite(preferredDelay) ? Math.max(250, preferredDelay) : delays[Math.min(this.reconnectAttempt++, delays.length - 1)];
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      void this.readDiscovery().then((discovery) => this.ensureEventSocket(discovery)).catch(() => this.scheduleReconnect());
+      void this.probe().catch(() => this.scheduleReconnect());
     }, delay);
     this.reconnectTimer.unref?.();
   }
 
   start() {
     this.stopped = false;
-    void this.readDiscovery().then((discovery) => this.ensureEventSocket(discovery)).catch(() => this.scheduleReconnect());
+    void this.connectNow({ allowLaunch: true });
   }
 
   stop() {

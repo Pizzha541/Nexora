@@ -52,9 +52,10 @@ const localProfile = createProfile();
 const localPresetAssets: VisualAsset[] = NEXORA_PRESET_FILES.map(([id, fileName, name]) => ({ id, name, mimeType: "image/svg+xml", fileName, sizeBytes: 0, animated: false, importedAt: new Date(0).toISOString(), source: "nexora" }));
 
 export const localBootstrap: BootstrapState = {
-  version: "0.6.1",
+  version: "0.6.2",
   onboardingCompleted: false,
   autoDetectDevice: true,
+  voxoraPaired: false,
   activeProfileId: localProfile.id,
   profiles: [localProfile],
   macros: [],

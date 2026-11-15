@@ -81,7 +81,7 @@ export const NATIVE_PLUGINS: NativePluginDefinition[] = [
     id: "voxora",
     name: "VOXORA TTS",
     developer: "NEXORA + VOXORA",
-    description: "Usa la cola TTS real de VOXORA 0.12.0 mediante su protocolo local autenticado. VOXORA debe estar abierto.",
+    description: "Usa la cola TTS real de VOXORA mediante su protocolo local 1.0 autenticado y reconexión automática.",
     status: "connection-required",
     actions: [
       { id: "speak", name: "Decir texto", description: "Añade una frase a la cola real de Microsoft o Gemini", kind: "native", value: "voxora.speak", settings: { text: "", voiceId: "", rate: 1, pitch: 1, volume: 1, priority: 0, queueBehavior: "append" }, fields: [

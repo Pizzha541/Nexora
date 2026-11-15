@@ -14,7 +14,7 @@ describe("native NEXORA plugins", () => {
   it("exposes the real VOXORA queue, controls and switchable voice presets", () => {
     const voxora = NATIVE_PLUGINS.find((plugin) => plugin.id === "voxora");
     expect(voxora?.actions.map((action) => action.value)).toEqual(expect.arrayContaining([
-      "voxora.speak", "voxora.speakClipboard", "voxora.pause", "voxora.resume", "voxora.stop", "voxora.skip", "voxora.clearQueue", "voxora.settings",
+      "voxora.speak", "voxora.speakClipboard", "voxora.muteToggle", "voxora.pause", "voxora.resume", "voxora.stop", "voxora.skip", "voxora.clearQueue", "voxora.settings",
     ]));
     expect(voxora?.actions.find((action) => action.value === "voxora.settings")?.fields?.some((field) => field.source === "voxoraVoices")).toBe(true);
   });

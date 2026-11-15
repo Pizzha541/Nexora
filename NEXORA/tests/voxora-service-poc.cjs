@@ -17,6 +17,7 @@ async function main() {
   }));
   const calls = [];
   let currentVolume = 0.72;
+  let discovered = 0;
   const responses = {
     '/api/v1/health': { ok: true, voxoraVersion: '0.12.0', protocolVersion: '1.0', engine: { ready: true, state: 'idle' }, capabilities: { speak: true } },
     '/api/v1/voices': { ok: true, voices: [{ id: 'voice-1', name: 'Helena', language: 'es-ES', engine: 'microsoft' }] },
@@ -27,6 +28,7 @@ async function main() {
   };
   const service = new VoxoraService({
     discoveryFile, webSocketFactory: null,
+    onDiscovered: () => { discovered += 1; },
     fetchImpl: async (url, options) => {
       assert.equal(options.headers.Authorization, `Bearer ${token}`);
       const body = options.body ? JSON.parse(options.body) : undefined;
@@ -54,7 +56,28 @@ async function main() {
     assert.equal(currentVolume, 0);
     assert.match(await service.action('voxora.muteToggle'), /activado/i);
     assert.equal(currentVolume, 0.72);
+    assert.equal(discovered, 1);
     await assert.rejects(() => service.action('voxora.speak', { text: 'x'.repeat(501) }), /500/);
+
+    let launchCount = 0;
+    let launched = false;
+    const launcher = new VoxoraService({
+      discoveryFile,
+      webSocketFactory: null,
+      shouldAutoLaunch: () => true,
+      launch: async () => { launchCount += 1; launched = true; return true; },
+      fetchImpl: async () => {
+        if (!launched) throw new Error('VOXORA todavía no está abierto.');
+        return { ok: true, status: 200, json: async () => responses['/api/v1/health'] };
+      },
+    });
+    const launchResult = await launcher.connectNow({ allowLaunch: true });
+    assert.equal(launchResult.launched, true);
+    assert.equal(launchCount, 1);
+    const reconnectResult = await launcher.connectNow({ allowLaunch: true });
+    assert.equal(reconnectResult.connected, true);
+    assert.equal(launchCount, 1);
+    launcher.stop();
 
     fs.writeFileSync(discoveryFile, JSON.stringify({ protocolVersion: '1.0', httpBaseUrl: 'http://example.com', webSocketUrl: 'ws://127.0.0.1:8791/api/v1/events', token }));
     await assert.rejects(() => service.readDiscovery(), /no permitida/i);

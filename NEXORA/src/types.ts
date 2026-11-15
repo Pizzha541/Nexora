@@ -208,6 +208,7 @@ export type BootstrapState = {
   version: string;
   onboardingCompleted: boolean;
   autoDetectDevice: boolean;
+  voxoraPaired: boolean;
   activeProfileId: string;
   profiles: Profile[];
   macros: MacroDefinition[];

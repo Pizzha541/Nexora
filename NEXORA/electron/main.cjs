@@ -38,6 +38,7 @@ let shuttingDown = false;
 let backgroundNoticeShown = false;
 let assetFilesValidated = false;
 let presetAssetsEnsured = false;
+let voxoraPairingInFlight = null;
 
 const windowsLocalData = process.platform === 'win32'
   ? path.resolve(app.getPath('appData'), '..', 'Local')
@@ -303,6 +304,7 @@ function loadRepository() {
     githubRepository: '',
     updaterPublicKey: '',
     onboardingCompleted: false,
+    voxoraPaired: false,
     visualSettings: defaultVisualSettings(),
   });
   let settingsChanged = !settingsExisted;
@@ -373,6 +375,83 @@ function loadRepository() {
 }
 
 function saveSettings(settings) { writeJson(path.join(dataRoot, 'settings.json'), settings); }
+
+function validVoxoraExecutable(candidate) {
+  try {
+    return Boolean(candidate && path.basename(candidate).toLowerCase() === 'voxora.exe' && fs.statSync(candidate).isFile());
+  } catch { return false; }
+}
+
+function installedVoxoraExecutable(savedPath) {
+  const candidates = [
+    savedPath,
+    path.join(windowsLocalData, 'Programs', 'voxora', 'Voxora.exe'),
+    path.join(windowsLocalData, 'Programs', 'Voxora', 'Voxora.exe'),
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Voxora', 'Voxora.exe'),
+    path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Voxora', 'Voxora.exe'),
+  ];
+  return candidates.find(validVoxoraExecutable) || null;
+}
+
+function executableForProcess(pid) {
+  const processId = Number(pid);
+  if (process.platform !== 'win32' || !Number.isInteger(processId) || processId <= 0) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${processId} -ErrorAction Stop).Path`], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    let output = '';
+    const timer = setTimeout(() => { child.kill(); resolve(null); }, 3_000);
+    timer.unref?.();
+    child.stdout.on('data', (chunk) => { if (output.length < 4_096) output += String(chunk); });
+    child.once('error', () => { clearTimeout(timer); resolve(null); });
+    child.once('close', () => {
+      clearTimeout(timer);
+      const candidate = output.trim();
+      resolve(validVoxoraExecutable(candidate) ? candidate : null);
+    });
+  });
+}
+
+async function rememberVoxoraPairing(discovery) {
+  if (isolatedTestRun) return;
+  if (voxoraPairingInFlight) return voxoraPairingInFlight;
+  voxoraPairingInFlight = (async () => {
+    let repository = loadRepository();
+    const newlyPaired = repository.settings.voxoraPaired !== true;
+    if (newlyPaired) {
+      repository.settings.voxoraPaired = true;
+      repository.settings.voxoraPairedAt = new Date().toISOString();
+      saveSettings(repository.settings);
+    }
+    const executable = installedVoxoraExecutable(repository.settings.voxoraExecutablePath) || await executableForProcess(discovery?.pid);
+    if (executable && repository.settings.voxoraExecutablePath !== executable) {
+      repository = loadRepository();
+      repository.settings.voxoraExecutablePath = executable;
+      saveSettings(repository.settings);
+    }
+    appendLog('voxora-pairing', `${newlyPaired ? 'Emparejado' : 'Reconectado'}${executable ? ' con ejecutable validado' : ''}.`);
+    sendEvent({ type: 'voxora-paired', paired: true, executableFound: Boolean(executable) });
+  })().finally(() => { voxoraPairingInFlight = null; });
+  return voxoraPairingInFlight;
+}
+
+async function launchPairedVoxora() {
+  const repository = loadRepository();
+  if (repository.settings.voxoraPaired !== true) return false;
+  const executable = installedVoxoraExecutable(repository.settings.voxoraExecutablePath);
+  if (!executable) {
+    appendLog('voxora-launch', 'Emparejado, pero Voxora.exe no se encontró en la ruta guardada ni en las rutas de instalación habituales.');
+    sendEvent({ type: 'voxora-status', status: 'missing' });
+    return false;
+  }
+  if (repository.settings.voxoraExecutablePath !== executable) {
+    repository.settings.voxoraExecutablePath = executable;
+    saveSettings(repository.settings);
+  }
+  const error = await shell.openPath(executable);
+  if (error) throw new Error(error);
+  appendLog('voxora-launch', 'VOXORA iniciado automáticamente.');
+  return true;
+}
 function saveProfile(profile) {
   if (!profile?.id || !profile.name?.trim() || !Array.isArray(profile.keys) || profile.keys.length !== 12) throw new Error('Perfil inválido.');
   profile.updatedAt = new Date().toISOString();
@@ -912,13 +991,14 @@ async function invoke(command, args) {
       plugins: pluginService?.list() || [], pluginCatalog: pluginService?.catalog() || [],
       onboardingCompleted: Boolean(repository.settings.onboardingCompleted),
       autoDetectDevice: repository.settings.autoDetectDevice !== false,
+      voxoraPaired: repository.settings.voxoraPaired === true,
       visualSettings: repository.settings.visualSettings, startupWarning: undefined,
       device: mode === 'simulation'
         ? { connected: true, mode, name: 'DisplayPad simulado' }
         : { connected: workerConnected, mode, name: 'Mountain DisplayPad', vendorId: 0x3282, productId: 0x0009, lastError: workerConnected ? undefined : 'Pulsa «Volver a detectar».' },
       integrations: [
         { id: 'obs', name: 'OBS Studio', status: obsService?.connected ? 'connected' : 'unconfigured', detail: obsService?.connected ? 'WebSocket 5.x conectado' : 'WebSocket 5.x · puerto 4455', priority: 1 },
-        { id: 'voxora', name: 'VOXORA TTS', status: voxora.status, detail: voxora.detail, priority: 2 },
+        { id: 'voxora', name: 'VOXORA TTS', status: voxora.status, detail: `${voxora.detail}${repository.settings.voxoraPaired ? ' · sincronización automática' : ''}`, priority: 2 },
         { id: 'discord', name: 'Discord', status: 'unconfigured', detail: 'Módulo oficial/autorizado por definir', priority: 3 },
         { id: 'twitch', name: 'Twitch', status: 'unconfigured', detail: 'Módulo preparado', priority: 4 },
       ],
@@ -1016,7 +1096,17 @@ async function invoke(command, args) {
   if (command === 'update_get_status') return updateService.getStatus();
   if (command === 'update_check') return updateService.check();
   if (command === 'update_install') return updateService.install();
-  if (command === 'voxora_get_catalog') return voxoraService.catalog();
+  if (command === 'voxora_get_catalog') {
+    const paired = repository.settings.voxoraPaired === true;
+    await voxoraService.connectNow({ allowLaunch: true });
+    let lastError;
+    for (let attempt = 0; attempt < (paired ? 12 : 1); attempt += 1) {
+      try { return await voxoraService.catalog(); }
+      catch (error) { lastError = error; }
+      if (attempt < 11) await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    throw lastError || new Error('VOXORA no está disponible.');
+  }
   if (command === 'voxora_action') return voxoraService.action(String(args.action || ''), args.settings || {});
   if (command === 'execute_key_action') { await executeKeyAction(structuredClone(args.key), Number(args.keyIndex || 0)); return 'Acción ejecutada.'; }
   if (command === 'import_visual_asset') {
@@ -1281,7 +1371,14 @@ app.whenReady().then(() => {
     openExternal: (url) => shell.openExternal(url),
   });
   obsService = new ObsService({ onEvent: sendEvent, log: appendLog });
-  voxoraService = new VoxoraService({ localAppData: windowsLocalData, onEvent: sendEvent, log: appendLog });
+  voxoraService = new VoxoraService({
+    localAppData: windowsLocalData,
+    onEvent: sendEvent,
+    log: appendLog,
+    shouldAutoLaunch: () => !isolatedTestRun && loadRepository().settings.voxoraPaired === true,
+    launch: launchPairedVoxora,
+    onDiscovered: rememberVoxoraPairing,
+  });
   voxoraService.start();
   updateService = createUpdateService({ sendEvent, log: appendLog });
   if (smokeTest) {
