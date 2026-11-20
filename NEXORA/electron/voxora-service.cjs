@@ -278,7 +278,7 @@ class VoxoraService {
 
   scheduleReconnect(preferredDelay) {
     if (this.stopped || this.reconnectTimer || !this.webSocketFactory) return;
-    const delays = [1_000, 2_000, 5_000, 10_000, 20_000];
+    const delays = [2_000, 5_000, 15_000, 30_000, 60_000];
     const delay = Number.isFinite(preferredDelay) ? Math.max(250, preferredDelay) : delays[Math.min(this.reconnectAttempt++, delays.length - 1)];
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -289,7 +289,8 @@ class VoxoraService {
 
   start() {
     this.stopped = false;
-    void this.connectNow({ allowLaunch: true });
+    // NEXORA only discovers an independently opened VOXORA instance.
+    void this.connectNow({ allowLaunch: false });
   }
 
   stop() {

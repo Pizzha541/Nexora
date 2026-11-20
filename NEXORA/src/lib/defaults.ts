@@ -52,7 +52,8 @@ const localProfile = createProfile();
 const localPresetAssets: VisualAsset[] = NEXORA_PRESET_FILES.map(([id, fileName, name]) => ({ id, name, mimeType: "image/svg+xml", fileName, sizeBytes: 0, animated: false, importedAt: new Date(0).toISOString(), source: "nexora" }));
 
 export const localBootstrap: BootstrapState = {
-  version: "0.7.1",
+  version: "0.8.0",
+  theme: "nexora",
   onboardingCompleted: false,
   autoDetectDevice: true,
   voxoraPaired: false,
@@ -60,15 +61,17 @@ export const localBootstrap: BootstrapState = {
   profiles: [localProfile],
   macros: [],
   device: {
-    connected: true,
-    mode: "simulation",
-    name: "DisplayPad simulado",
+    connected: false,
+    mode: "hardware",
+    name: "Mountain DisplayPad",
+    lastError: "Buscando DisplayPad…",
   },
   integrations: [
     { id: "obs", name: "OBS Studio", status: "unconfigured", detail: "WebSocket 5.x · puerto 4455", priority: 1 },
     { id: "voxora", name: "VOXORA TTS", status: "unconfigured", detail: "Esperando interfaz de comunicación", priority: 2 },
     { id: "discord", name: "Discord", status: "unconfigured", detail: "Módulo oficial/autorizado por definir", priority: 3 },
     { id: "twitch", name: "Twitch", status: "unconfigured", detail: "Módulo preparado", priority: 4 },
+    { id: "tiktok-live-studio", name: "TikTok LIVE Studio", status: "unavailable", detail: "Sin API pública oficial de control local; usa atajos configurables verificados por el usuario", priority: 5 },
   ],
   assets: localPresetAssets,
   plugins: [],

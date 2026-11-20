@@ -226,5 +226,6 @@ export type BootstrapState = {
   visualSettings: VisualSettings;
   updaterConfigured: boolean;
   startupWarning?: string;
+  theme: "nexora" | "vice";
 };
 

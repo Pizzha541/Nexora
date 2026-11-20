@@ -64,6 +64,14 @@ export async function deleteBackendMacro(macroId: string): Promise<void> {
   await invoke("delete_macro", { macroId });
 }
 
+export async function executeBackendMacro(macroId: string): Promise<string> {
+  return invoke<string>("execute_macro", { macroId });
+}
+
+export async function stopBackendMacros(): Promise<string> {
+  return invoke<string>("stop_macros");
+}
+
 export async function setActiveProfile(profileId: string): Promise<void> {
   try {
     await invoke("set_active_profile", { profileId });
@@ -74,6 +82,18 @@ export async function setActiveProfile(profileId: string): Promise<void> {
 
 export async function setProfileOrder(profileIds: string[]): Promise<void> {
   await invoke("set_profile_order", { profileIds });
+}
+
+export async function exportBackendProfile(profileId: string): Promise<string> {
+  return invoke<string>("export_profile", { profileId });
+}
+
+export async function importBackendProfile(): Promise<Profile | null> {
+  return invoke<Profile | null>("import_profile");
+}
+
+export async function setTheme(theme: BootstrapState["theme"]): Promise<BootstrapState["theme"]> {
+  return invoke<BootstrapState["theme"]>("set_theme", { theme });
 }
 
 export async function setDeviceMode(mode: DeviceMode): Promise<BootstrapState["device"]> {

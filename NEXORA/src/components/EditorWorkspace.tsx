@@ -18,14 +18,14 @@ import {
   Trash2,
   Volume2,
 } from "lucide-react";
-import type { ActionKind, FolderNode, InstalledPlugin, KeyAction, KeyConfig, ObsCatalog, Profile, SequenceStep, VisualAsset, VoxoraCatalog } from "../types";
+import type { ActionKind, FolderNode, InstalledPlugin, KeyAction, KeyConfig, MacroDefinition, ObsCatalog, Profile, SequenceStep, VisualAsset, VoxoraCatalog } from "../types";
 import { NEXORA_NATIVE_ACTION_MIME, NEXORA_PLUGIN_ACTION_MIME } from "../lib/realtime";
 import { findNativeAction, NATIVE_PLUGINS, type NativeSettingField } from "../lib/nativePlugins";
 import { ASSET_CATEGORIES, assetCategory, categoryCounts, type AssetCategoryId } from "../lib/assetCategories";
 
 export type PluginDrop = { pluginId: string; actionId: string; settings: Record<string, unknown> };
 export type NativeActionDrop = {
-  kind: Exclude<ActionKind, "none" | "plugin" | "text" | "macro">;
+  kind: Exclude<ActionKind, "none" | "plugin" | "text">;
   value: string;
   name: string;
   settings?: Record<string, unknown>;
@@ -51,6 +51,7 @@ const nativeAction = (kind: NativeActionDrop["kind"], value: string, name: strin
 function buildCategories(
   profiles: Profile[],
   folders: FolderNode[],
+  macros: MacroDefinition[],
   plugins: InstalledPlugin[],
   obsScenes: string[],
 ): LibraryCategory[] {
@@ -136,6 +137,12 @@ function buildCategories(
       ].map(([value, name, Icon]) => ({ id: `media-${value}`, name: String(name), description: "Control multimedia de Windows", icon: <Icon size={16} />, recommended: ["playPause", "volumeDown", "volumeUp", "mute"].includes(String(value)), native: nativeAction("media", String(value), String(name)) })),
     },
     {
+      id: "macros",
+      name: "Macros",
+      icon: <Layers3 size={16} />,
+      actions: macros.map((macro) => ({ id: `macro-${macro.id}`, name: macro.name, description: `${macro.steps.length} pasos · ${macro.repetitions} repetición(es)`, icon: <CirclePlay size={16} />, recommended: true, native: nativeAction("macro", macro.id, `Macro · ${macro.name}`) })),
+    },
+    {
       id: "profiles",
       name: "Perfiles",
       icon: <Layers3 size={16} />,
@@ -188,9 +195,10 @@ export function EditorWorkspace({ library, center, inspector }: { library: React
   );
 }
 
-export function ActionLibrary({ profiles, folders, plugins, obsScenes, obsConnected, onRefreshObs, onAssignNative, onAssignPlugin }: {
+export function ActionLibrary({ profiles, folders, macros = [], plugins, obsScenes, obsConnected, onRefreshObs, onAssignNative, onAssignPlugin }: {
   profiles: Profile[];
   folders: FolderNode[];
+  macros?: MacroDefinition[];
   plugins: InstalledPlugin[];
   obsScenes: string[];
   obsConnected: boolean;
@@ -202,7 +210,7 @@ export function ActionLibrary({ profiles, folders, plugins, obsScenes, obsConnec
   const [closed, setClosed] = useState<Set<string>>(new Set(["system", "media", "profiles", "folders"]));
   const [view, setView] = useState<"keys" | "plugins">("keys");
   const [mode, setMode] = useState<"basic" | "advanced">("basic");
-  const categories = buildCategories(profiles, folders, plugins, obsScenes);
+  const categories = buildCategories(profiles, folders, macros, plugins, obsScenes);
   const normalized = query.trim().toLocaleLowerCase("es");
 
   return <div className={`action-library ${mode}`} data-tour="actions">
@@ -371,7 +379,7 @@ export function KeyInspector({ keyConfig, assetPreview, renderAsset, assets, pro
     {action.kind !== "none" && <div className="inspector-action-settings">
       {action.kind === "openUrl" && <label>Dirección web<input value={action.value ?? ""} placeholder="https://…" onChange={(event) => setAction({ value: event.target.value })} /></label>}
       {action.kind === "launchPath" && <label>Aplicación o archivo<div className="path-picker"><input readOnly value={action.value ?? ""} placeholder="Selecciona un archivo" /><button type="button" onClick={() => void onPickFile().then((value) => value && setAction({ value }))}>Examinar</button></div></label>}
-      {action.kind === "hotkey" && <div className="hotkey-settings"><label>Tecla<input value={action.value ?? ""} maxLength={8} placeholder="A, F1, ENTER…" onChange={(event) => setAction({ value: event.target.value.toUpperCase() })} /></label><label>Modificadores<select multiple value={(action.settings?.modifiers as string[] | undefined) ?? []} onChange={(event) => setAction({ settings: { ...action.settings, modifiers: [...event.target.selectedOptions].map((option) => option.value) } })}><option value="control">Ctrl</option><option value="shift">Shift</option><option value="alt">Alt</option><option value="meta">Windows</option></select></label></div>}
+      {action.kind === "hotkey" && <div className="hotkey-settings"><label>Tecla<input value={action.value ?? ""} maxLength={12} placeholder="A, F13…F24, ENTER…" onChange={(event) => setAction({ value: event.target.value.toUpperCase() })} /></label><label>Modificadores<select multiple value={(action.settings?.modifiers as string[] | undefined) ?? []} onChange={(event) => setAction({ settings: { ...action.settings, modifiers: [...event.target.selectedOptions].map((option) => option.value) } })}><option value="control">Ctrl</option><option value="shift">Shift</option><option value="alt">Alt</option><option value="meta">Windows</option></select></label></div>}
       {action.kind === "profile" && <label>Perfil<select value={action.value ?? ""} onChange={(event) => setAction({ value: event.target.value })}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>}
       {action.kind === "folder" && <label>Carpeta<select value={action.value ?? ""} onChange={(event) => setAction({ value: event.target.value })}>{allFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>}
       {nativeDefinition?.fields?.map((field) => renderNativeField(field))}
@@ -421,7 +429,7 @@ export function KeyInspector({ keyConfig, assetPreview, renderAsset, assets, pro
               {target.kind === "delay" && <label>Duración del delay (ms)<input type="number" min={0} max={60000} step={100} value={Number(target.settings?.delayMs ?? 1000)} onChange={(event) => updateSequenceAction(index, { ...target, settings: { ...target.settings, delayMs: Math.max(0, Math.min(60000, Number(event.target.value))) } })} /></label>}
               {target.kind === "openUrl" && <label>Dirección web<input value={target.value ?? ""} placeholder="https://…" onChange={(event) => updateSequenceAction(index, { ...target, value: event.target.value })} /></label>}
               {target.kind === "launchPath" && <label>Aplicación o archivo<div className="path-picker"><input value={target.value ?? ""} readOnly /><button type="button" onClick={() => void onPickFile().then((value) => value && updateSequenceAction(index, { ...target, value }))}>Examinar</button></div></label>}
-              {target.kind === "hotkey" && <><label>Tecla<input value={target.value ?? ""} maxLength={8} onChange={(event) => updateSequenceAction(index, { ...target, value: event.target.value.toUpperCase() })} /></label><label>Modificadores<select multiple value={(target.settings?.modifiers as string[] | undefined) ?? []} onChange={(event) => updateSequenceAction(index, { ...target, settings: { ...target.settings, modifiers: [...event.target.selectedOptions].map((option) => option.value) } })}><option value="control">Ctrl</option><option value="shift">Shift</option><option value="alt">Alt</option><option value="meta">Windows</option></select></label></>}
+              {target.kind === "hotkey" && <><label>Tecla<input value={target.value ?? ""} maxLength={12} placeholder="A, F13…F24, ENTER…" onChange={(event) => updateSequenceAction(index, { ...target, value: event.target.value.toUpperCase() })} /></label><label>Modificadores<select multiple value={(target.settings?.modifiers as string[] | undefined) ?? []} onChange={(event) => updateSequenceAction(index, { ...target, settings: { ...target.settings, modifiers: [...event.target.selectedOptions].map((option) => option.value) } })}><option value="control">Ctrl</option><option value="shift">Shift</option><option value="alt">Alt</option><option value="meta">Windows</option></select></label></>}
               {target.kind === "media" && <label>Control multimedia<select value={target.value ?? "playPause"} onChange={(event) => updateSequenceAction(index, { ...target, value: event.target.value })}><option value="playPause">Reproducir / pausar</option><option value="previous">Anterior</option><option value="next">Siguiente</option><option value="volumeDown">Bajar volumen</option><option value="volumeUp">Subir volumen</option><option value="mute">Silenciar</option></select></label>}
               {definition?.fields?.map((field) => renderNativeField(field, target, (next) => updateSequenceAction(index, next), step.id))}
             </div>

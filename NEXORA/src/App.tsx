@@ -38,7 +38,11 @@ import {
   createBackendProfile,
   deleteBackendProfile,
   deleteBackendMacro,
+  executeBackendMacro,
+  stopBackendMacros,
   duplicateBackendProfile,
+  exportBackendProfile,
+  importBackendProfile,
   getBootstrapState,
   listenForButtonEvents,
   refreshDeviceStatus,
@@ -48,6 +52,7 @@ import {
   setProfileOrder,
   setDeviceMode,
   setAutoDetectDevice,
+  setTheme,
   testObsConnection,
   forgetObsConnection,
   applyHardwareKey,
@@ -152,10 +157,11 @@ const removeFolderFromTree = (folders: FolderNode[], id: string): FolderNode[] =
   folders.filter((folder) => folder.id !== id).map((folder) => ({ ...folder, children: removeFolderFromTree(folder.children, id) }));
 
 function StatusPill({ connected, mode }: { connected: boolean; mode: DeviceMode }) {
+  const hardwareConnected = connected && mode === "hardware";
   return (
-    <div className={`status-pill ${connected ? "online" : "offline"}`}>
+    <div className={`status-pill ${hardwareConnected ? "online" : "offline"}`}>
       <span className="status-dot" />
-      {connected ? (mode === "simulation" ? "Simulación activa" : "DisplayPad conectado") : "Sin conexión"}
+      {hardwareConnected ? "DisplayPad conectado" : "DisplayPad no conectado"}
     </div>
   );
 }
@@ -707,17 +713,20 @@ function DeviceSettingsPanel({
   onModeChange,
   onAutoDetectChange,
   onRedetect,
+  onThemeChange,
 }: {
   state: BootstrapState;
   onModeChange: (mode: DeviceMode) => Promise<void>;
   onAutoDetectChange: (enabled: boolean) => Promise<void>;
   onRedetect: () => Promise<void>;
+  onThemeChange: (theme: BootstrapState["theme"]) => Promise<void>;
 }) {
   const [listening, setListening] = useState(false);
   const [events, setEvents] = useState<ButtonEvent[]>([]);
   const [listenMessage, setListenMessage] = useState("");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ phase: "idle", currentVersion: state.version, progress: 0, message: "Listo para buscar actualizaciones.", configured: state.updaterConfigured });
   const [updateBusy, setUpdateBusy] = useState(false);
+  const developerMode = new URLSearchParams(window.location.search).get("devtools") === "1";
 
   useEffect(() => {
     void getUpdateStatus().then(setUpdateStatus).catch((error) => setUpdateStatus((current) => ({ ...current, phase: "error", message: error instanceof Error ? error.message : String(error) })));
@@ -744,21 +753,21 @@ function DeviceSettingsPanel({
 
   return (
     <div className="section-stack">
-      <div className="section-title"><span><em>07</em> Configuración</span><h1>Control explícito</h1><p>El modo de simulación siempre se distingue del hardware real.</p></div>
+      <div className="section-title"><span><em>07</em> Configuración</span><h1>Control explícito</h1><p>Conexión automática, apariencia y actualizaciones en un solo lugar.</p></div>
       <div className="glass-card settings-card">
         <h2>Modo del dispositivo</h2>
         <div className="segmented">
-          <button className={state.device.mode === "simulation" ? "active" : ""} onClick={() => void onModeChange("simulation")}>Simulación</button>
+          {developerMode && <button className={state.device.mode === "simulation" ? "active" : ""} onClick={() => void onModeChange("simulation")}>Simulación interna</button>}
           <button className={state.device.mode === "hardware" ? "active" : ""} onClick={() => void onModeChange("hardware")}>Hardware</button>
         </div>
         <label className="setting-toggle">
           <input type="checkbox" checked={state.autoDetectDevice} onChange={(event) => void onAutoDetectChange(event.target.checked)} />
           <span><strong>Detectar automáticamente</strong><small>Conecta, cambia a hardware y resincroniza al enchufar el DisplayPad.</small></span>
         </label>
-        <p className={state.device.connected ? "device-message ok" : "device-message error"}>
-          {state.device.connected
+        <p className={state.device.connected && state.device.mode === "hardware" ? "device-message ok" : "device-message error"}>
+          {state.device.connected && state.device.mode === "hardware"
             ? `${state.device.name} detectado${state.device.vendorId ? ` · VID 0x${state.device.vendorId.toString(16).padStart(4, "0")} / PID 0x${(state.device.productId ?? 0).toString(16).padStart(4, "0")}` : ""}`
-            : state.device.lastError || "No se detectó el dispositivo."}
+            : state.device.mode === "simulation" && !developerMode ? "DisplayPad físico no conectado. La simulación interna permanece oculta." : state.device.lastError || "No se detectó el dispositivo."}
         </p>
         {state.device.mode === "hardware" && (
           <div className="hardware-actions">
@@ -768,6 +777,13 @@ function DeviceSettingsPanel({
         )}
         <p>La prueba de pulsaciones abre únicamente la interfaz HID de control y no envía datos al dispositivo.</p>
         {listenMessage && <div className="listener-result"><strong>{listenMessage}</strong>{events.length > 0 && <div className="event-chips">{events.map((event, index) => <span key={`${event.timestampMs}-${event.key}-${index}`} className={event.pressed ? "pressed" : "released"}>T{event.key} {event.pressed ? "↓" : "↑"} · {event.timestampMs} ms <small>{event.rawOffset42.toString(16).padStart(2, "0")}/{event.rawOffset47.toString(16).padStart(2, "0")}</small></span>)}</div>}</div>}
+        <hr />
+        <h2>Apariencia</h2>
+        <p>El tema alternativo usa recursos originales y conserva la misma estructura accesible.</p>
+        <div className="theme-picker">
+          <button type="button" className={state.theme === "nexora" ? "active" : ""} onClick={() => void onThemeChange("nexora")}><span className="theme-swatch nexora" />NEXORA · Grafito</button>
+          <button type="button" className={state.theme === "vice" ? "active" : ""} onClick={() => void onThemeChange("vice")}><span className="theme-swatch vice" />Vice Nights</button>
+        </div>
         <hr />
         <h2>Actualizaciones</h2>
         <div className={`update-status ${updateStatus.phase}`}>
@@ -822,6 +838,7 @@ function MacrosPanel({ macros, onChange }: { macros: MacroDefinition[]; onChange
   const selected = macros.find((macro) => macro.id === selectedId) ?? null;
   const [draft, setDraft] = useState<MacroDefinition | null>(selected);
   const [message, setMessage] = useState("");
+  const [runningId, setRunningId] = useState<string | null>(null);
 
   useEffect(() => {
     setDraft(macros.find((macro) => macro.id === selectedId) ?? null);
@@ -862,6 +879,45 @@ function MacrosPanel({ macros, onChange }: { macros: MacroDefinition[]; onChange
     setMessage("Macro eliminada y archivada.");
   };
 
+  const duplicate = () => {
+    if (!draft) return;
+    const copy = structuredClone(draft);
+    copy.id = crypto.randomUUID();
+    copy.name = `${copy.name} (copia)`;
+    setSelectedId(copy.id);
+    setDraft(copy);
+    setMessage("Copia creada; guárdala para conservarla.");
+  };
+
+  const moveStep = (index: number, direction: -1 | 1) => {
+    if (!draft) return;
+    const target = index + direction;
+    if (target < 0 || target >= draft.steps.length) return;
+    const steps = [...draft.steps];
+    [steps[index], steps[target]] = [steps[target], steps[index]];
+    setDraft({ ...draft, steps });
+  };
+
+  const run = async () => {
+    if (!draft) return;
+    try {
+      const saved = await saveBackendMacro(draft);
+      onChange(macros.some((macro) => macro.id === saved.id) ? macros.map((macro) => macro.id === saved.id ? saved : macro) : [...macros, saved]);
+      setRunningId(saved.id);
+      setMessage(`Ejecutando “${saved.name}”…`);
+      setMessage(await executeBackendMacro(saved.id));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunningId(null);
+    }
+  };
+
+  const stop = async () => {
+    try { setMessage(await stopBackendMacros()); }
+    catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+  };
+
   const updateStep = (index: number, patch: Partial<MacroDefinition["steps"][number]>) => {
     if (!draft) return;
     setDraft({ ...draft, steps: draft.steps.map((step, stepIndex) => stepIndex === index ? { ...step, ...patch } : step) });
@@ -879,10 +935,10 @@ function MacrosPanel({ macros, onChange }: { macros: MacroDefinition[]; onChange
         <section className="macro-editor glass-card">
           {draft ? <>
             <div className="macro-fields"><label>Nombre<input value={draft.name} maxLength={60} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label>Repeticiones<input type="number" min={1} max={100} value={draft.repetitions} onChange={(event) => setDraft({ ...draft, repetitions: Math.max(1, Math.min(100, Number(event.target.value))) })} /></label></div>
-            <div className="macro-steps">{draft.steps.map((step, index) => <div className="macro-step" key={index}><span className="step-number">{index + 1}</span><label>Pausa ms<input type="number" min={0} max={60000} value={step.delayMs} onChange={(event) => updateStep(index, { delayMs: Math.max(0, Math.min(60000, Number(event.target.value))) })} /></label><label>Acción<select value={step.action.kind} onChange={(event) => updateStep(index, { action: { kind: event.target.value as typeof step.action.kind, value: "" } })}><option value="hotkey">Atajo</option><option value="text">Texto</option><option value="openUrl">Web</option><option value="launchPath">Aplicación/archivo</option><option value="media">Multimedia</option><option value="profile">Perfil</option></select></label><label>Valor<input value={step.action.value ?? ""} onChange={(event) => updateStep(index, { action: { ...step.action, value: event.target.value } })} /></label><button type="button" className="icon-button" disabled={draft.steps.length <= 1} onClick={() => setDraft({ ...draft, steps: draft.steps.filter((_, stepIndex) => stepIndex !== index) })}><Trash2 size={15} /></button></div>)}</div>
+            <div className="macro-steps">{draft.steps.map((step, index) => <div className="macro-step" key={index}><span className="step-number">{index + 1}</span><label>Pausa ms<input type="number" min={0} max={60000} value={step.delayMs} onChange={(event) => updateStep(index, { delayMs: Math.max(0, Math.min(60000, Number(event.target.value))) })} /></label><label>Acción<select value={step.action.kind} onChange={(event) => updateStep(index, { action: { kind: event.target.value as typeof step.action.kind, value: "" } })}><option value="hotkey">Atajo</option><option value="text">Texto</option><option value="openUrl">Web</option><option value="launchPath">Aplicación/archivo</option><option value="media">Multimedia</option><option value="profile">Perfil</option></select></label><label>Valor<input value={step.action.value ?? ""} placeholder={step.action.kind === "hotkey" ? "CTRL+SHIFT+F13" : undefined} onChange={(event) => updateStep(index, { action: { ...step.action, value: event.target.value } })} /></label><div className="macro-step-actions"><button type="button" className="icon-button" disabled={index === 0} title="Subir paso" onClick={() => moveStep(index, -1)}>↑</button><button type="button" className="icon-button" disabled={index === draft.steps.length - 1} title="Bajar paso" onClick={() => moveStep(index, 1)}>↓</button><button type="button" className="icon-button" disabled={draft.steps.length <= 1} title="Eliminar paso" onClick={() => setDraft({ ...draft, steps: draft.steps.filter((_, stepIndex) => stepIndex !== index) })}><Trash2 size={15} /></button></div></div>)}</div>
             <button type="button" className="secondary-button" disabled={draft.steps.length >= 500} onClick={() => setDraft({ ...draft, steps: [...draft.steps, { delayMs: 100, action: { kind: "hotkey", value: "" } }] })}><Plus size={15} /> Añadir paso</button>
-            <div className="macro-footer"><button type="button" className="primary-button" onClick={() => void save()}><Save size={16} /> Guardar macro</button><button type="button" className="danger-button" disabled={!macros.some((macro) => macro.id === draft.id)} onClick={() => void remove()}><Trash2 size={16} /> Eliminar</button><span>{message || "La ejecución se habilitará tras completar el motor de acciones autorizado."}</span></div>
-          </> : <div className="empty-editor"><Workflow size={32} /><h2>Crea una macro</h2><p>El editor persiste configuraciones reales; no ejecuta entradas hasta que el motor tenga cancelación y consentimiento.</p></div>}
+            <div className="macro-footer"><button type="button" className="primary-button" disabled={Boolean(runningId)} onClick={() => void run()}><Play size={16} /> {runningId ? "Ejecutando…" : "Probar"}</button><button type="button" className="secondary-button" onClick={() => void save()}><Save size={16} /> Guardar</button><button type="button" className="secondary-button" onClick={duplicate}><Copy size={16} /> Duplicar</button><button type="button" className="danger-button" disabled={!runningId} onClick={() => void stop()}><X size={16} /> Detener</button><button type="button" className="danger-button" disabled={!macros.some((macro) => macro.id === draft.id)} onClick={() => void remove()}><Trash2 size={16} /> Eliminar</button><span>{message || "Las macros se ejecutan realmente en Windows y pueden detenerse durante cualquier pausa."}</span></div>
+          </> : <div className="empty-editor"><Workflow size={32} /><h2>Crea una macro</h2><p>Combina atajos, texto, páginas web, aplicaciones, multimedia y perfiles con pausas controladas.</p></div>}
         </section>
       </div>
     </div>
@@ -940,8 +996,13 @@ function App() {
     }
   }, []);
   useEffect(() => { void refresh(); }, []);
-  useEffect(() => { void loadVoxoraCatalog(); }, [loadVoxoraCatalog]);
+  useEffect(() => {
+    if (state?.integrations.some((integration) => integration.id === "voxora" && integration.status === "connected")) void loadVoxoraCatalog();
+  }, [loadVoxoraCatalog, state?.integrations]);
   useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => {
+    document.documentElement.dataset.theme = state?.theme ?? "nexora";
+  }, [state?.theme]);
   useEffect(() => {
     if (state) window.nexoraDesktop?.ready();
   }, [state]);
@@ -952,7 +1013,7 @@ function App() {
       const voxoraEvent = value as { status?: string };
       if (value.type === "voxora-paired" || voxoraEvent.status === "connected") {
         void loadVoxoraCatalog();
-        setPluginNotice(value.type === "voxora-paired" ? "VOXORA quedó emparejado y se conectará automáticamente." : "VOXORA sincronizado automáticamente.");
+        setPluginNotice(value.type === "voxora-paired" ? "VOXORA quedó emparejado con la instancia que abriste." : "VOXORA sincronizado automáticamente mientras ambas apps estén abiertas.");
         window.setTimeout(() => setPluginNotice(""), 4000);
       }
       return;
@@ -1164,6 +1225,31 @@ function App() {
     setState((current) => current ? { ...current, profiles: current.profiles.filter((profile) => profile.id !== activeProfile.id), activeProfileId } : current);
   };
 
+  const renameActiveProfile = () => {
+    if (!activeProfile) return;
+    const name = window.prompt("Nuevo nombre del perfil", activeProfile.name)?.trim();
+    if (!name || name === activeProfile.name) return;
+    commitProfile({ ...activeProfile, name: name.slice(0, 60), updatedAt: new Date().toISOString() });
+  };
+
+  const exportActiveProfile = async () => {
+    if (!activeProfile) return;
+    try { setPluginNotice(await exportBackendProfile(activeProfile.id)); }
+    catch (error) { setPluginNotice(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const importProfile = async () => {
+    try {
+      const profile = await importBackendProfile();
+      if (!profile) return;
+      setState((current) => current ? { ...current, profiles: [...current.profiles, profile], activeProfileId: profile.id } : current);
+      await setActiveProfile(profile.id);
+      setSelectedFolderId(null);
+      setSelectedKey(0);
+      setPluginNotice(`Perfil “${profile.name}” importado y validado.`);
+    } catch (error) { setPluginNotice(error instanceof Error ? error.message : String(error)); }
+  };
+
   const changeMode = async (mode: DeviceMode) => {
     const device = await setDeviceMode(mode);
     setState((current) => current ? { ...current, device, autoDetectDevice: mode === "hardware" } : current);
@@ -1354,6 +1440,7 @@ function App() {
       library={<ActionLibrary
         profiles={state.profiles}
         folders={activeProfile.folders}
+        macros={state.macros}
         plugins={state.plugins}
         obsScenes={obsScenes}
         obsConnected={state.integrations.some((integration) => integration.id === "obs" && integration.status === "connected")}
@@ -1426,13 +1513,16 @@ function App() {
   ) : section === "macros" ? (
     <MacrosPanel macros={state.macros} onChange={(macros) => setState((current) => current ? { ...current, macros } : current)} />
   ) : section === "profiles" ? (
-    <div className="section-stack"><div className="section-title"><span><em>02</em> Perfiles</span><h1>Contextos que se adaptan</h1><p>Crea perfiles independientes y arrástralos para cambiar su orden.</p></div><div className="profile-actions"><button type="button" className="secondary-button" onClick={() => void duplicateActiveProfile()}><Copy size={16} /> Duplicar activo</button><button type="button" className="danger-button" disabled={state.profiles.length <= 1} onClick={() => void deleteActiveProfile()}><Trash2 size={16} /> Eliminar activo</button></div><div className="profile-grid">{state.profiles.map((profile) => <button type="button" draggable key={profile.id} className={`profile-card ${profile.id === activeProfile.id ? "active" : ""}`} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData(NEXORA_PROFILE_MIME, profile.id); }} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_PROFILE_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); const source = event.dataTransfer.getData(NEXORA_PROFILE_MIME); if (source) reorderProfileCards(source, profile.id); }} onClick={() => void selectProfile(profile)}><Layers3 /><div><h3>{profile.name}</h3><p>{profile.description}</p><small>{profile.keys.length} teclas · {profile.automaticApp || "Manual"}</small></div><ChevronRight /></button>)}<button type="button" className="profile-card new" onClick={() => void addProfile()}><Sparkles /><div><h3>Nuevo perfil</h3><p>Parte de una configuración limpia y segura.</p></div></button></div></div>
+    <div className="section-stack"><div className="section-title"><span><em>02</em> Perfiles</span><h1>Contextos que se adaptan</h1><p>Crea, renombra, importa, exporta y ordena perfiles independientes.</p></div><div className="profile-actions"><button type="button" className="secondary-button" onClick={renameActiveProfile}>Renombrar</button><button type="button" className="secondary-button" onClick={() => void duplicateActiveProfile()}><Copy size={16} /> Duplicar</button><button type="button" className="secondary-button" onClick={() => void exportActiveProfile()}><Download size={16} /> Exportar</button><button type="button" className="secondary-button" onClick={() => void importProfile()}><Upload size={16} /> Importar</button><button type="button" className="danger-button" disabled={state.profiles.length <= 1} onClick={() => void deleteActiveProfile()}><Trash2 size={16} /> Eliminar</button></div><div className="profile-grid">{state.profiles.map((profile) => <button type="button" draggable key={profile.id} className={`profile-card ${profile.id === activeProfile.id ? "active" : ""}`} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData(NEXORA_PROFILE_MIME, profile.id); }} onDragOver={(event) => { if (event.dataTransfer.types.includes(NEXORA_PROFILE_MIME)) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); const source = event.dataTransfer.getData(NEXORA_PROFILE_MIME); if (source) reorderProfileCards(source, profile.id); }} onClick={() => void selectProfile(profile)}><Layers3 /><div><h3>{profile.name}</h3><p>{profile.description}</p><small>{profile.keys.length} teclas · {profile.automaticApp || "Manual"}</small></div><ChevronRight /></button>)}<button type="button" className="profile-card new" onClick={() => void addProfile()}><Sparkles /><div><h3>Nuevo perfil</h3><p>Parte de una configuración limpia y segura.</p></div></button></div></div>
   ) : section === "settings" ? (
     <DeviceSettingsPanel state={state} onModeChange={changeMode} onAutoDetectChange={async (enabled) => {
       const autoDetectDevice = await setAutoDetectDevice(enabled);
       const refreshed = enabled ? await getBootstrapState() : undefined;
       setState((current) => refreshed || (current ? { ...current, autoDetectDevice } : current));
-    }} onRedetect={redetectDevice} />
+    }} onRedetect={redetectDevice} onThemeChange={async (theme) => {
+      const saved = await setTheme(theme);
+      setState((current) => current ? { ...current, theme: saved } : current);
+    }} />
   ) : section === "about" ? (
     <AboutPanel state={state} onOpenSettings={() => setSection("settings")} />
   ) : (

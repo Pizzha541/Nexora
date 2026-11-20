@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, safeStorage, shell, Tray, utilityProcess } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, safeStorage, shell, Tray, utilityProcess } = require('electron');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -27,6 +27,7 @@ const buttonEvents = [];
 const pendingKeySync = new Map();
 const longPressTimers = new Map();
 const multiSwitchStates = new Map();
+const activeMacroRuns = new Map();
 let keySyncTimer = null;
 let usbSequence = Promise.resolve();
 let reconnectTimer = null;
@@ -42,7 +43,6 @@ let shuttingDown = false;
 let backgroundNoticeShown = false;
 let assetFilesValidated = false;
 let presetAssetsEnsured = false;
-let voxoraPairingInFlight = null;
 
 const windowsLocalData = process.platform === 'win32'
   ? path.resolve(app.getPath('appData'), '..', 'Local')
@@ -302,13 +302,14 @@ function loadRepository() {
   const settingsExisted = fs.existsSync(settingsFile);
   const settings = readJson(settingsFile, {
     activeProfileId: profiles[0].id,
-    deviceMode: 'simulation',
+    deviceMode: 'hardware',
     autoDetectDevice: true,
     githubOwner: '',
     githubRepository: '',
     updaterPublicKey: '',
     onboardingCompleted: false,
     voxoraPaired: false,
+    theme: 'nexora',
     visualSettings: defaultVisualSettings(),
   });
   let settingsChanged = !settingsExisted;
@@ -318,6 +319,10 @@ function loadRepository() {
   }
   if (settings.autoDetectDevice === undefined) {
     settings.autoDetectDevice = true;
+    settingsChanged = true;
+  }
+  if (!['nexora', 'vice'].includes(settings.theme)) {
+    settings.theme = 'nexora';
     settingsChanged = true;
   }
   if (!settings.visualSettings) settingsChanged = true;
@@ -425,81 +430,17 @@ async function connectSavedObs() {
   }
 }
 
-function validVoxoraExecutable(candidate) {
-  try {
-    return Boolean(candidate && path.basename(candidate).toLowerCase() === 'voxora.exe' && fs.statSync(candidate).isFile());
-  } catch { return false; }
-}
-
-function installedVoxoraExecutable(savedPath) {
-  const candidates = [
-    savedPath,
-    path.join(windowsLocalData, 'Programs', 'voxora', 'Voxora.exe'),
-    path.join(windowsLocalData, 'Programs', 'Voxora', 'Voxora.exe'),
-    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Voxora', 'Voxora.exe'),
-    path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Voxora', 'Voxora.exe'),
-  ];
-  return candidates.find(validVoxoraExecutable) || null;
-}
-
-function executableForProcess(pid) {
-  const processId = Number(pid);
-  if (process.platform !== 'win32' || !Number.isInteger(processId) || processId <= 0) return Promise.resolve(null);
-  return new Promise((resolve) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${processId} -ErrorAction Stop).Path`], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    let output = '';
-    const timer = setTimeout(() => { child.kill(); resolve(null); }, 3_000);
-    timer.unref?.();
-    child.stdout.on('data', (chunk) => { if (output.length < 4_096) output += String(chunk); });
-    child.once('error', () => { clearTimeout(timer); resolve(null); });
-    child.once('close', () => {
-      clearTimeout(timer);
-      const candidate = output.trim();
-      resolve(validVoxoraExecutable(candidate) ? candidate : null);
-    });
-  });
-}
-
 async function rememberVoxoraPairing(discovery) {
   if (isolatedTestRun) return;
-  if (voxoraPairingInFlight) return voxoraPairingInFlight;
-  voxoraPairingInFlight = (async () => {
-    let repository = loadRepository();
-    const newlyPaired = repository.settings.voxoraPaired !== true;
-    if (newlyPaired) {
-      repository.settings.voxoraPaired = true;
-      repository.settings.voxoraPairedAt = new Date().toISOString();
-      saveSettings(repository.settings);
-    }
-    const executable = installedVoxoraExecutable(repository.settings.voxoraExecutablePath) || await executableForProcess(discovery?.pid);
-    if (executable && repository.settings.voxoraExecutablePath !== executable) {
-      repository = loadRepository();
-      repository.settings.voxoraExecutablePath = executable;
-      saveSettings(repository.settings);
-    }
-    appendLog('voxora-pairing', `${newlyPaired ? 'Emparejado' : 'Reconectado'}${executable ? ' con ejecutable validado' : ''}.`);
-    sendEvent({ type: 'voxora-paired', paired: true, executableFound: Boolean(executable) });
-  })().finally(() => { voxoraPairingInFlight = null; });
-  return voxoraPairingInFlight;
-}
-
-async function launchPairedVoxora() {
   const repository = loadRepository();
-  if (repository.settings.voxoraPaired !== true) return false;
-  const executable = installedVoxoraExecutable(repository.settings.voxoraExecutablePath);
-  if (!executable) {
-    appendLog('voxora-launch', 'Emparejado, pero Voxora.exe no se encontró en la ruta guardada ni en las rutas de instalación habituales.');
-    sendEvent({ type: 'voxora-status', status: 'missing' });
-    return false;
-  }
-  if (repository.settings.voxoraExecutablePath !== executable) {
-    repository.settings.voxoraExecutablePath = executable;
+  const newlyPaired = repository.settings.voxoraPaired !== true;
+  if (newlyPaired) {
+    repository.settings.voxoraPaired = true;
+    repository.settings.voxoraPairedAt = new Date().toISOString();
     saveSettings(repository.settings);
   }
-  const error = await shell.openPath(executable);
-  if (error) throw new Error(error);
-  appendLog('voxora-launch', 'VOXORA iniciado automáticamente.');
-  return true;
+  appendLog('voxora-pairing', `${newlyPaired ? 'Emparejado' : 'Reconectado'} con la instancia abierta por el usuario.`);
+  sendEvent({ type: 'voxora-paired', paired: true, pid: Number(discovery?.pid || 0) });
 }
 function saveProfile(profile) {
   if (!profile?.id || !profile.name?.trim() || !Array.isArray(profile.keys) || profile.keys.length !== 12) throw new Error('Perfil inválido.');
@@ -509,6 +450,12 @@ function saveProfile(profile) {
 }
 function saveMacro(macro) {
   if (!macro?.id || !macro.name?.trim() || !Array.isArray(macro.steps) || !macro.steps.length) throw new Error('Macro inválida.');
+  if (macro.steps.length > 500) throw new Error('Una macro admite como máximo 500 pasos.');
+  macro.repetitions = Math.max(1, Math.min(100, Number(macro.repetitions || 1)));
+  for (const step of macro.steps) {
+    step.delayMs = Math.max(0, Math.min(60_000, Number(step.delayMs || 0)));
+    if (!step.action?.kind || ['macro', 'multiAction', 'multiSwitch', 'plugin'].includes(step.action.kind)) throw new Error('La macro contiene un paso no permitido o recursivo.');
+  }
   writeJson(path.join(dataRoot, 'macros', `${macro.id}.json`), macro);
   return macro;
 }
@@ -943,21 +890,28 @@ function sendNativeHotkey(value) {
 
 function sendConfiguredHotkey(action) {
   if (process.platform !== 'win32') throw new Error('Los atajos configurables requieren Windows.');
-  const rawKey = String(action.value || '').trim().toUpperCase();
-  const aliases = { ENTER: 0x0D, RETURN: 0x0D, ESC: 0x1B, ESCAPE: 0x1B, SPACE: 0x20, TAB: 0x09, BACKSPACE: 0x08, DELETE: 0x2E, UP: 0x26, DOWN: 0x28, LEFT: 0x25, RIGHT: 0x27, HOME: 0x24, END: 0x23 };
+  const parts = String(action.value || '').trim().toUpperCase().split('+').map((part) => part.trim()).filter(Boolean);
+  const rawKey = parts.pop() || '';
+  const aliases = { ENTER: 0x0D, RETURN: 0x0D, ESC: 0x1B, ESCAPE: 0x1B, SPACE: 0x20, TAB: 0x09, BACKSPACE: 0x08, DELETE: 0x2E, INSERT: 0x2D, UP: 0x26, DOWN: 0x28, LEFT: 0x25, RIGHT: 0x27, HOME: 0x24, END: 0x23, PAGEUP: 0x21, PAGEDOWN: 0x22, PRINTSCREEN: 0x2C, PAUSE: 0x13 };
   let keyCode = aliases[rawKey];
   if (!keyCode && /^[A-Z0-9]$/.test(rawKey)) keyCode = rawKey.charCodeAt(0);
-  const functionMatch = /^F([1-9]|1[0-2])$/.exec(rawKey);
+  const functionMatch = /^F([1-9]|1\d|2[0-4])$/.exec(rawKey);
   if (!keyCode && functionMatch) keyCode = 0x6F + Number(functionMatch[1]);
-  if (!keyCode) throw new Error('Tecla no permitida. Usa A-Z, 0-9, F1-F12, Enter, Escape, flechas, Tab, Space o Delete.');
+  if (!keyCode) throw new Error('Tecla no permitida. Usa A-Z, 0-9, F1-F24 o una tecla especial compatible.');
   const modifierCodes = { control: 0x11, shift: 0x10, alt: 0x12, meta: 0x5B };
-  const modifiers = Array.isArray(action.settings?.modifiers) ? action.settings.modifiers : Array.isArray(action.modifiers) ? action.modifiers : [];
+  const inlineModifiers = parts.map((value) => ({ CTRL: 'control', CONTROL: 'control', SHIFT: 'shift', ALT: 'alt', WIN: 'meta', WINDOWS: 'meta', META: 'meta' }[value])).filter(Boolean);
+  if (inlineModifiers.length !== parts.length) throw new Error('La combinación contiene un modificador desconocido.');
+  const configuredModifiers = Array.isArray(action.settings?.modifiers) ? action.settings.modifiers : Array.isArray(action.modifiers) ? action.modifiers : [];
+  const modifiers = [...configuredModifiers, ...inlineModifiers];
   const keys = [...new Set(modifiers.map((value) => modifierCodes[String(value).toLowerCase()]).filter(Boolean)), keyCode];
   const down = keys.map((key) => `[NXHotkey]::keybd_event(${key},0,0,[UIntPtr]::Zero)`).join(';');
   const up = [...keys].reverse().map((key) => `[NXHotkey]::keybd_event(${key},0,2,[UIntPtr]::Zero)`).join(';');
   const script = `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class NXHotkey { [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra); }';${down};Start-Sleep -Milliseconds 45;${up}`;
   const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true, stdio: 'ignore' });
-  child.unref();
+  return new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`Windows no pudo enviar el atajo (código ${code}).`)));
+  });
 }
 
 async function executeNativeAction(value, settings = {}) {
@@ -1020,12 +974,47 @@ async function executeNativeAction(value, settings = {}) {
   throw new Error('Acción nativa desconocida o no autorizada.');
 }
 
-async function executeAction(action, keyIndex, depth = 0) {
+async function waitForMacro(delayMs, run) {
+  let remaining = Math.max(0, Math.min(60_000, Number(delayMs || 0)));
+  while (remaining > 0) {
+    if (run?.cancelled) throw new Error('Macro detenida por el usuario.');
+    const slice = Math.min(remaining, 50);
+    await new Promise((resolve) => setTimeout(resolve, slice));
+    remaining -= slice;
+  }
+}
+
+async function executeMacroById(macroId, keyIndex, depth = 0) {
+  if (depth > 2) throw new Error('No se permiten macros recursivas.');
+  const repository = loadRepository();
+  const macro = repository.macros.find((item) => item.id === macroId);
+  if (!macro) throw new Error('Macro no encontrada.');
+  if (activeMacroRuns.has(macro.id)) throw new Error(`La macro “${macro.name}” ya se está ejecutando.`);
+  const run = { cancelled: false, macroId: macro.id };
+  activeMacroRuns.set(macro.id, run);
+  sendEvent({ type: 'macro-status', macroId: macro.id, running: true });
+  try {
+    for (let repetition = 0; repetition < Math.max(1, Math.min(100, Number(macro.repetitions || 1))); repetition += 1) {
+      for (const step of macro.steps.slice(0, 500)) {
+        await waitForMacro(step.delayMs, run);
+        if (run.cancelled) throw new Error('Macro detenida por el usuario.');
+        await executeAction(step.action, keyIndex, depth + 1, run);
+      }
+    }
+    return `Macro “${macro.name}” completada.`;
+  } finally {
+    activeMacroRuns.delete(macro.id);
+    sendEvent({ type: 'macro-status', macroId: macro.id, running: false });
+  }
+}
+
+async function executeAction(action, keyIndex, depth = 0, macroRun = null) {
   if (!action || action.kind === 'none') return;
+  if (macroRun?.cancelled) throw new Error('Macro detenida por el usuario.');
   if (depth > 3) throw new Error('La secuencia supera la profundidad permitida.');
   if (action.kind === 'delay') {
     const delayMs = Math.max(0, Math.min(60_000, Number(action.settings?.delayMs || 0)));
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await waitForMacro(delayMs, macroRun);
     return;
   }
   if (action.kind === 'multiAction' || action.kind === 'multiSwitch') {
@@ -1038,7 +1027,7 @@ async function executeAction(action, keyIndex, depth = 0) {
       steps = Array.isArray(action.states?.[currentState]) ? action.states[currentState] : [];
     }
     if (steps.length > 100) throw new Error('Una Multi Action admite como máximo 100 pasos.');
-    for (const step of steps) await executeAction(step?.action, keyIndex, depth + 1);
+    for (const step of steps) await executeAction(step?.action, keyIndex, depth + 1, macroRun);
     if (switchKey) {
       const nextState = currentState === 0 ? 1 : 0;
       multiSwitchStates.set(switchKey, nextState);
@@ -1049,7 +1038,19 @@ async function executeAction(action, keyIndex, depth = 0) {
     return;
   }
   if (action.kind === 'hotkey') {
-    sendConfiguredHotkey(action);
+    await sendConfiguredHotkey(action);
+  } else if (action.kind === 'text') {
+    if (process.platform !== 'win32') throw new Error('La escritura de texto requiere Windows.');
+    const value = String(action.value || '');
+    if (!value || value.length > 4_000) throw new Error('El texto debe contener entre 1 y 4000 caracteres.');
+    const previous = clipboard.readText();
+    clipboard.writeText(value);
+    try {
+      await sendConfiguredHotkey({ kind: 'hotkey', value: 'V', settings: { modifiers: ['control'] } });
+      await waitForMacro(80, macroRun);
+    } finally {
+      clipboard.writeText(previous);
+    }
   } else if (action.kind === 'openUrl') {
     const rawUrl = String(action.value || '').trim();
     if (!rawUrl) throw new Error('La dirección web es obligatoria.');
@@ -1091,6 +1092,8 @@ async function executeAction(action, keyIndex, depth = 0) {
     obsKeyStates.clear();
     await syncDesiredPage(repository);
     sendEvent({ type: 'navigate-folder', folderId: folder.id });
+  } else if (action.kind === 'macro') {
+    await executeMacroById(action.value, keyIndex, depth + 1);
   } else {
     throw new Error(`La acción ${action.kind} todavía no tiene ejecutor seguro.`);
   }
@@ -1124,6 +1127,7 @@ async function invoke(command, args) {
       onboardingCompleted: Boolean(repository.settings.onboardingCompleted),
       autoDetectDevice: repository.settings.autoDetectDevice !== false,
       voxoraPaired: repository.settings.voxoraPaired === true,
+      theme: repository.settings.theme || 'nexora',
       obsConnectionUrl: repository.settings.obsConnection?.url || 'ws://127.0.0.1:4455',
       obsConnectionSaved: Boolean(repository.settings.obsConnection?.url),
       visualSettings: repository.settings.visualSettings, startupWarning: undefined,
@@ -1132,9 +1136,10 @@ async function invoke(command, args) {
         : { connected: workerConnected, mode, name: 'Mountain DisplayPad', vendorId: 0x3282, productId: 0x0009, lastError: workerConnected ? undefined : 'Pulsa «Volver a detectar».' },
       integrations: [
         { id: 'obs', name: 'OBS Studio', status: obsService?.connected ? 'connected' : 'unconfigured', detail: obsService?.connected ? 'WebSocket 5.x conectado' : 'WebSocket 5.x · puerto 4455', priority: 1 },
-        { id: 'voxora', name: 'VOXORA TTS', status: voxora.status, detail: `${voxora.detail}${repository.settings.voxoraPaired ? ' · sincronización automática' : ''}`, priority: 2 },
+        { id: 'voxora', name: 'VOXORA TTS', status: voxora.status, detail: `${voxora.detail}${repository.settings.voxoraPaired ? ' · reconexión local automática' : ''}`, priority: 2 },
         { id: 'discord', name: 'Discord', status: 'unconfigured', detail: 'Módulo oficial/autorizado por definir', priority: 3 },
         { id: 'twitch', name: 'Twitch', status: 'unconfigured', detail: 'Módulo preparado', priority: 4 },
+        { id: 'tiktok-live-studio', name: 'TikTok LIVE Studio', status: 'unavailable', detail: 'Sin API pública oficial de control local; usa atajos configurables verificados por el usuario', priority: 5 },
       ],
       updaterConfigured: true,
     };
@@ -1143,6 +1148,13 @@ async function invoke(command, args) {
     repository.settings.onboardingCompleted = Boolean(args.completed);
     saveSettings(repository.settings);
     return repository.settings.onboardingCompleted;
+  }
+  if (command === 'set_theme') {
+    const theme = String(args.theme || '');
+    if (!['nexora', 'vice'].includes(theme)) throw new Error('Tema no compatible.');
+    repository.settings.theme = theme;
+    saveSettings(repository.settings);
+    return theme;
   }
   if (command === 'save_profile') return saveProfile(structuredClone(args.profile));
   if (command === 'create_profile') return saveProfile(createProfile(args.name));
@@ -1166,6 +1178,36 @@ async function invoke(command, args) {
     saveSettings(repository.settings);
     return repository.settings.activeProfileId;
   }
+  if (command === 'export_profile') {
+    const profile = repository.profiles.find((item) => item.id === args.profileId);
+    if (!profile) throw new Error('Perfil no encontrado.');
+    const result = await dialog.showSaveDialog(window || undefined, {
+      title: 'Exportar perfil NEXORA',
+      defaultPath: `${profile.name.replace(/[^a-z0-9áéíóúüñ _.-]/gi, '').trim() || 'perfil'}.nexora-profile.json`,
+      filters: [{ name: 'Perfil NEXORA', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePath) return 'Exportación cancelada.';
+    writeJson(result.filePath, { format: 'nexora-profile', version: 1, profile });
+    return `Perfil exportado en ${result.filePath}`;
+  }
+  if (command === 'import_profile') {
+    const result = await dialog.showOpenDialog(window || undefined, {
+      title: 'Importar perfil NEXORA', properties: ['openFile'],
+      filters: [{ name: 'Perfil NEXORA', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    let payload;
+    try { payload = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8')); }
+    catch { throw new Error('El archivo no contiene JSON válido.'); }
+    const source = payload?.format === 'nexora-profile' ? payload.profile : payload;
+    if (!source?.name || !Array.isArray(source.keys) || source.keys.length !== 12) throw new Error('El archivo no es un perfil NEXORA válido de 12 teclas.');
+    const imported = structuredClone(source);
+    imported.id = crypto.randomUUID();
+    imported.name = `${String(imported.name).slice(0, 55)} (importado)`;
+    imported.folders = Array.isArray(imported.folders) ? imported.folders : [];
+    imported.updatedAt = new Date().toISOString();
+    return saveProfile(imported);
+  }
   if (command === 'set_active_profile') { repository.settings.activeProfileId = args.profileId; saveSettings(repository.settings); return null; }
   if (command === 'set_profile_order') {
     const ids = Array.isArray(args.profileIds) ? args.profileIds.map(String) : [];
@@ -1180,6 +1222,11 @@ async function invoke(command, args) {
     const source = path.join(dataRoot, 'macros', `${args.macroId}.json`);
     if (fs.existsSync(source)) { fs.copyFileSync(source, path.join(dataRoot, 'backups', `deleted-macro-${args.macroId}-${Date.now()}.json`)); fs.unlinkSync(source); }
     return null;
+  }
+  if (command === 'execute_macro') return executeMacroById(String(args.macroId || ''), -1, 0);
+  if (command === 'stop_macros') {
+    for (const run of activeMacroRuns.values()) run.cancelled = true;
+    return activeMacroRuns.size ? 'Deteniendo macros activas…' : 'No hay macros en ejecución.';
   }
   if (command === 'set_device_mode') {
     repository.settings.deviceMode = args.mode;
@@ -1231,13 +1278,12 @@ async function invoke(command, args) {
   if (command === 'update_check') return updateService.check();
   if (command === 'update_install') return updateService.install();
   if (command === 'voxora_get_catalog') {
-    const paired = repository.settings.voxoraPaired === true;
-    await voxoraService.connectNow({ allowLaunch: true });
+    await voxoraService.connectNow({ allowLaunch: false });
     let lastError;
-    for (let attempt = 0; attempt < (paired ? 12 : 1); attempt += 1) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       try { return await voxoraService.catalog(); }
       catch (error) { lastError = error; }
-      if (attempt < 11) await new Promise((resolve) => setTimeout(resolve, 500));
+      if (attempt < 1) await new Promise((resolve) => setTimeout(resolve, 350));
     }
     throw lastError || new Error('VOXORA no está disponible.');
   }
@@ -1550,8 +1596,8 @@ app.whenReady().then(() => {
       else if (value?.type === 'voxora-status' && value.status === 'connected') void syncVoxoraTtsState(true);
     },
     log: appendLog,
-    shouldAutoLaunch: () => !isolatedTestRun && loadRepository().settings.voxoraPaired === true,
-    launch: launchPairedVoxora,
+    shouldAutoLaunch: () => false,
+    launch: async () => false,
     onDiscovered: rememberVoxoraPairing,
   });
   voxoraService.start();
