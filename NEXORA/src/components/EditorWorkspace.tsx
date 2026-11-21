@@ -45,6 +45,42 @@ type LibraryAction = {
 
 type LibraryCategory = { id: string; name: string; icon: ReactNode; actions: LibraryAction[] };
 
+const HOTKEY_GROUPS = [
+  { label: "Teclas de función", keys: Array.from({ length: 24 }, (_, index) => ({ value: `F${index + 1}`, label: `F${index + 1}${index >= 12 ? " · extendida" : ""}` })) },
+  { label: "Letras", keys: "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((value) => ({ value, label: value })) },
+  { label: "Números", keys: "0123456789".split("").map((value) => ({ value, label: value })) },
+  { label: "Navegación", keys: [
+    ["ENTER", "Enter"], ["ESCAPE", "Escape"], ["SPACE", "Espacio"], ["TAB", "Tab"], ["BACKSPACE", "Retroceso"],
+    ["DELETE", "Suprimir"], ["INSERT", "Insertar"], ["HOME", "Inicio"], ["END", "Fin"], ["PAGEUP", "Página arriba"],
+    ["PAGEDOWN", "Página abajo"], ["UP", "Flecha arriba"], ["DOWN", "Flecha abajo"], ["LEFT", "Flecha izquierda"], ["RIGHT", "Flecha derecha"],
+  ].map(([value, label]) => ({ value, label })) },
+  { label: "Sistema", keys: [["PRINTSCREEN", "Imprimir pantalla"], ["PAUSE", "Pausa"], ["CAPSLOCK", "Bloq. mayúsculas"], ["NUMLOCK", "Bloq. numérico"], ["SCROLLLOCK", "Bloq. desplazamiento"]].map(([value, label]) => ({ value, label })) },
+  { label: "Teclado numérico", keys: [
+    ...Array.from({ length: 10 }, (_, index) => [`NUMPAD${index}`, `Num ${index}`]),
+    ["ADD", "Num +"], ["SUBTRACT", "Num −"], ["MULTIPLY", "Num ×"], ["DIVIDE", "Num ÷"], ["DECIMAL", "Num decimal"],
+  ].map(([value, label]) => ({ value, label })) },
+] as const;
+
+type HotkeyModifier = "control" | "shift" | "alt" | "meta";
+const modifierAliases: Record<string, HotkeyModifier | undefined> = { CTRL: "control", CONTROL: "control", SHIFT: "shift", ALT: "alt", WIN: "meta", WINDOWS: "meta", META: "meta" };
+
+const parseHotkey = (value: string, configured: string[]) => {
+  const parts = value.toUpperCase().split("+").map((part) => part.trim()).filter(Boolean);
+  const key = parts.pop() ?? "";
+  const modifiers = [...new Set([...configured, ...parts.map((part) => modifierAliases[part]).filter((part): part is HotkeyModifier => Boolean(part))])].filter((part): part is HotkeyModifier => ["control", "shift", "alt", "meta"].includes(part));
+  return { key, modifiers };
+};
+
+export function HotkeySelector({ value, modifiers = [], onChange, compact = false }: { value: string; modifiers?: string[]; onChange: (value: string, modifiers: HotkeyModifier[]) => void; compact?: boolean }) {
+  const parsed = parseHotkey(value, modifiers);
+  const toggle = (modifier: HotkeyModifier) => onChange(parsed.key, parsed.modifiers.includes(modifier) ? parsed.modifiers.filter((item) => item !== modifier) : [...parsed.modifiers, modifier]);
+  return <div className={`hotkey-selector ${compact ? "compact" : ""}`}>
+    <label>Tecla<select value={parsed.key} onChange={(event) => onChange(event.target.value, parsed.modifiers)}><option value="">Selecciona una tecla…</option>{HOTKEY_GROUPS.map((group) => <optgroup label={group.label} key={group.label}>{group.keys.map((key) => <option value={key.value} key={key.value}>{key.label}</option>)}</optgroup>)}</select></label>
+    <fieldset><legend>Modificadores <small>opcionales</small></legend><div>{([['control', 'Ctrl'], ['shift', 'Shift'], ['alt', 'Alt'], ['meta', 'Windows']] as const).map(([modifier, label]) => <label className={parsed.modifiers.includes(modifier) ? "active" : ""} key={modifier}><input type="checkbox" checked={parsed.modifiers.includes(modifier)} onChange={() => toggle(modifier)} />{label}</label>)}</div></fieldset>
+    {parsed.key && <output>{[...parsed.modifiers.map((modifier) => ({ control: "Ctrl", shift: "Shift", alt: "Alt", meta: "Windows" }[modifier])), parsed.key].join(" + ")}</output>}
+  </div>;
+}
+
 const flattenFolders = (folders: FolderNode[]): FolderNode[] => folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 const nativeAction = (kind: NativeActionDrop["kind"], value: string, name: string, settings?: Record<string, unknown>): NativeActionDrop => ({ kind, value, name, settings });
 
@@ -379,7 +415,7 @@ export function KeyInspector({ keyConfig, assetPreview, renderAsset, assets, pro
     {action.kind !== "none" && <div className="inspector-action-settings">
       {action.kind === "openUrl" && <label>Dirección web<input value={action.value ?? ""} placeholder="https://…" onChange={(event) => setAction({ value: event.target.value })} /></label>}
       {action.kind === "launchPath" && <label>Aplicación o archivo<div className="path-picker"><input readOnly value={action.value ?? ""} placeholder="Selecciona un archivo" /><button type="button" onClick={() => void onPickFile().then((value) => value && setAction({ value }))}>Examinar</button></div></label>}
-      {action.kind === "hotkey" && <div className="hotkey-settings"><label>Tecla<input value={action.value ?? ""} maxLength={12} placeholder="A, F13…F24, ENTER…" onChange={(event) => setAction({ value: event.target.value.toUpperCase() })} /></label><label>Modificadores<select multiple value={(action.settings?.modifiers as string[] | undefined) ?? []} onChange={(event) => setAction({ settings: { ...action.settings, modifiers: [...event.target.selectedOptions].map((option) => option.value) } })}><option value="control">Ctrl</option><option value="shift">Shift</option><option value="alt">Alt</option><option value="meta">Windows</option></select></label></div>}
+      {action.kind === "hotkey" && <HotkeySelector value={action.value ?? ""} modifiers={(action.settings?.modifiers as string[] | undefined) ?? []} onChange={(value, modifiers) => setAction({ value, settings: { ...action.settings, modifiers } })} />}
       {action.kind === "profile" && <label>Perfil<select value={action.value ?? ""} onChange={(event) => setAction({ value: event.target.value })}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>}
       {action.kind === "folder" && <label>Carpeta<select value={action.value ?? ""} onChange={(event) => setAction({ value: event.target.value })}>{allFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>}
       {nativeDefinition?.fields?.map((field) => renderNativeField(field))}
@@ -429,7 +465,7 @@ export function KeyInspector({ keyConfig, assetPreview, renderAsset, assets, pro
               {target.kind === "delay" && <label>Duración del delay (ms)<input type="number" min={0} max={60000} step={100} value={Number(target.settings?.delayMs ?? 1000)} onChange={(event) => updateSequenceAction(index, { ...target, settings: { ...target.settings, delayMs: Math.max(0, Math.min(60000, Number(event.target.value))) } })} /></label>}
               {target.kind === "openUrl" && <label>Dirección web<input value={target.value ?? ""} placeholder="https://…" onChange={(event) => updateSequenceAction(index, { ...target, value: event.target.value })} /></label>}
               {target.kind === "launchPath" && <label>Aplicación o archivo<div className="path-picker"><input value={target.value ?? ""} readOnly /><button type="button" onClick={() => void onPickFile().then((value) => value && updateSequenceAction(index, { ...target, value }))}>Examinar</button></div></label>}
-              {target.kind === "hotkey" && <><label>Tecla<input value={target.value ?? ""} maxLength={12} placeholder="A, F13…F24, ENTER…" onChange={(event) => updateSequenceAction(index, { ...target, value: event.target.value.toUpperCase() })} /></label><label>Modificadores<select multiple value={(target.settings?.modifiers as string[] | undefined) ?? []} onChange={(event) => updateSequenceAction(index, { ...target, settings: { ...target.settings, modifiers: [...event.target.selectedOptions].map((option) => option.value) } })}><option value="control">Ctrl</option><option value="shift">Shift</option><option value="alt">Alt</option><option value="meta">Windows</option></select></label></>}
+              {target.kind === "hotkey" && <HotkeySelector compact value={target.value ?? ""} modifiers={(target.settings?.modifiers as string[] | undefined) ?? []} onChange={(value, modifiers) => updateSequenceAction(index, { ...target, value, settings: { ...target.settings, modifiers } })} />}
               {target.kind === "media" && <label>Control multimedia<select value={target.value ?? "playPause"} onChange={(event) => updateSequenceAction(index, { ...target, value: event.target.value })}><option value="playPause">Reproducir / pausar</option><option value="previous">Anterior</option><option value="next">Siguiente</option><option value="volumeDown">Bajar volumen</option><option value="volumeUp">Subir volumen</option><option value="mute">Silenciar</option></select></label>}
               {definition?.fields?.map((field) => renderNativeField(field, target, (next) => updateSequenceAction(index, next), step.id))}
             </div>

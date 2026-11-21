@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ActionLibrary, KeyInspector } from "../src/components/EditorWorkspace";
+import { ActionLibrary, HotkeySelector, KeyInspector } from "../src/components/EditorWorkspace";
 import { createProfile } from "../src/lib/defaults";
 import { NEXORA_NATIVE_ACTION_MIME } from "../src/lib/realtime";
 import type { InstalledPlugin } from "../src/types";
@@ -27,6 +27,19 @@ const plugin: InstalledPlugin = {
 };
 
 describe("editor DisplayPad", () => {
+  it("ofrece F1-F24 por categorías y deja los modificadores opcionales", () => {
+    const onChange = vi.fn();
+    const { container } = render(<HotkeySelector value="F18" modifiers={[]} onChange={onChange} />);
+
+    expect(screen.getByLabelText("Tecla")).toHaveValue("F18");
+    expect(container.querySelector('optgroup[label="Teclas de función"] option[value="F24"]')).toBeInTheDocument();
+    expect(screen.getByLabelText("Ctrl")).not.toBeChecked();
+    expect(screen.getByText("F18", { selector: "output" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Ctrl"));
+    expect(onChange).toHaveBeenCalledWith("F18", ["control"]);
+  });
+
   it("asigna acciones reales desde la biblioteca con un clic", () => {
     const profile = createProfile("Perfil principal");
     profile.id = "profile-id";

@@ -320,7 +320,7 @@ nav button:hover { color: white; background: rgba(255,255,255,.035); } nav butto
 .editor-inspector .inspector-actions button { white-space:nowrap; }
 .inspector-empty-action { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px dashed rgba(139,92,246,.22); border-radius:8px; color:#8b8492; font-size:8px; }
 .inspector-action-settings { display:flex; flex-wrap:wrap; gap:8px 10px; padding:9px 10px; border:1px solid rgba(255,255,255,.055); border-radius:9px; background:#202023; }
-.inspector-action-settings>label,.inspector-action-settings>.hotkey-settings { flex:1 1 210px; margin:0; }
+.inspector-action-settings>label,.inspector-action-settings>.hotkey-selector { flex:1 1 420px; margin:0; }
 .inspector-action-settings>.inspector-wide { flex:0 1 230px; margin:0; }
 .inspector-appearance { border:1px solid rgba(255,255,255,.055); border-radius:9px; background:#202023; }
 .inspector-appearance>summary { display:grid; grid-template-columns:20px 1fr auto; align-items:center; gap:7px; padding:9px 11px; color:#9e98a4; cursor:pointer; list-style:none; }
@@ -373,9 +373,20 @@ nav button:hover { color: white; background: rgba(255,255,255,.035); } nav butto
 .sequence-step-settings>label { flex:1 1 230px; display:flex; flex-direction:column; gap:6px; color:#99939f; font-size:8px; text-transform:uppercase; }
 .sequence-step-settings input,.sequence-step-settings select { padding:9px; border:1px solid #46464a; border-radius:6px; background:#121214; color:#ddd; }
 .sequence-modal>footer { display:flex; align-items:center; justify-content:space-between; padding-top:13px; color:#77727d; font-size:9px; }
-.hotkey-settings { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; }
-.hotkey-settings label { min-width:0; }
-.hotkey-settings select[multiple] { min-height:92px; padding:6px; }
+.hotkey-selector { display:grid; grid-template-columns:minmax(170px,1fr) minmax(250px,1.35fr); gap:8px 10px; align-items:end; min-width:0; }
+.hotkey-selector>label { min-width:0; margin:0; display:flex; flex-direction:column; gap:6px; color:#99939f; font-size:8px; text-transform:uppercase; letter-spacing:.04em; }
+.hotkey-selector select { width:100%; min-width:0; padding:9px; border:1px solid #46464a; border-radius:7px; background:#121214; color:#ddd; }
+.hotkey-selector fieldset { min-width:0; margin:0; padding:6px 8px 8px; border:1px solid #46464a; border-radius:7px; }
+.hotkey-selector legend { padding:0 4px; color:#99939f; font-size:8px; text-transform:uppercase; letter-spacing:.04em; }
+.hotkey-selector legend small { color:#746f78; text-transform:none; }
+.hotkey-selector fieldset>div { display:flex; gap:5px; flex-wrap:wrap; }
+.hotkey-selector fieldset label { position:relative; margin:0; padding:6px 9px; border:1px solid #454149; border-radius:6px; background:#171519; color:#918b96; font-size:8px; cursor:pointer; text-transform:none; user-select:none; }
+.hotkey-selector fieldset label.active { border-color:#8b5cf6; background:#302047; color:#e7ddff; box-shadow:0 0 0 1px rgba(139,92,246,.18) inset; }
+.hotkey-selector fieldset input { position:absolute; opacity:0; pointer-events:none; }
+.hotkey-selector output { grid-column:1/-1; min-height:18px; color:#a78bfa; font-size:8px; letter-spacing:.03em; }
+.hotkey-selector.compact { grid-template-columns:minmax(150px,1fr) minmax(220px,1.25fr); }
+.macro-step>.hotkey-selector { grid-column:4; }
+@media (max-width:900px) { .hotkey-selector,.hotkey-selector.compact { grid-template-columns:1fr; } .hotkey-selector output { grid-column:1; } }
 .update-popup-backdrop { position:fixed; z-index:80; inset:0; display:grid; place-items:center; padding:24px; background:rgba(0,0,0,.68); backdrop-filter:blur(8px); }
 .update-popup { width:min(430px,100%); padding:28px; border:1px solid #49414f; border-radius:18px; background:linear-gradient(145deg,#262328,#171619); box-shadow:0 28px 80px #000; text-align:center; }
 .update-popup-mark { width:54px; height:54px; display:grid; place-items:center; margin:0 auto 16px; border-radius:15px; color:#fff; background:linear-gradient(145deg,#8b27dd,#4d117c); box-shadow:0 12px 30px rgba(130,36,206,.35); }

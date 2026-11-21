@@ -1,7 +1,6 @@
 'use strict';
 
 const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, safeStorage, shell, Tray, utilityProcess } = require('electron');
-const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -9,6 +8,7 @@ const { createPluginService } = require('./plugin-service.cjs');
 const { ObsService } = require('./obs-service.cjs');
 const { VoxoraService } = require('./voxora-service.cjs');
 const { createUpdateService } = require('./update-service.cjs');
+const { sendWindowsCodes, sendWindowsHotkey } = require('./input-service.cjs');
 
 let window = null;
 let tray = null;
@@ -868,10 +868,8 @@ function findFolderById(folders, id) {
 function sendMediaKey(value) {
   const codes = { playPause: 0xB3, next: 0xB0, previous: 0xB1, volumeUp: 0xAF, volumeDown: 0xAE, mute: 0xAD };
   const code = codes[value];
-  if (!code || process.platform !== 'win32') throw new Error('Control multimedia no compatible en este sistema.');
-  const script = `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class NXMedia { [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra); }'; [NXMedia]::keybd_event(${code},0,0,[UIntPtr]::Zero); [NXMedia]::keybd_event(${code},0,2,[UIntPtr]::Zero)`;
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true, stdio: 'ignore' });
-  child.unref();
+  if (!code) throw new Error('Control multimedia no compatible en este sistema.');
+  return sendWindowsCodes([code], `control multimedia ${value}`);
 }
 
 function sendNativeHotkey(value) {
@@ -880,38 +878,12 @@ function sendNativeHotkey(value) {
     'discord.deafen': [0x11, 0x10, 0x44],
   };
   const keys = shortcuts[value];
-  if (!keys || process.platform !== 'win32') throw new Error('Atajo nativo no compatible en este sistema.');
-  const down = keys.map((key) => `[NXKeys]::keybd_event(${key},0,0,[UIntPtr]::Zero)`).join(';');
-  const up = [...keys].reverse().map((key) => `[NXKeys]::keybd_event(${key},0,2,[UIntPtr]::Zero)`).join(';');
-  const script = `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class NXKeys { [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra); }';${down};Start-Sleep -Milliseconds 45;${up}`;
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true, stdio: 'ignore' });
-  child.unref();
+  if (!keys) throw new Error('Atajo nativo no compatible en este sistema.');
+  return sendWindowsCodes(keys, value === 'discord.mute' ? 'Ctrl + Shift + M' : 'Ctrl + Shift + D');
 }
 
 function sendConfiguredHotkey(action) {
-  if (process.platform !== 'win32') throw new Error('Los atajos configurables requieren Windows.');
-  const parts = String(action.value || '').trim().toUpperCase().split('+').map((part) => part.trim()).filter(Boolean);
-  const rawKey = parts.pop() || '';
-  const aliases = { ENTER: 0x0D, RETURN: 0x0D, ESC: 0x1B, ESCAPE: 0x1B, SPACE: 0x20, TAB: 0x09, BACKSPACE: 0x08, DELETE: 0x2E, INSERT: 0x2D, UP: 0x26, DOWN: 0x28, LEFT: 0x25, RIGHT: 0x27, HOME: 0x24, END: 0x23, PAGEUP: 0x21, PAGEDOWN: 0x22, PRINTSCREEN: 0x2C, PAUSE: 0x13 };
-  let keyCode = aliases[rawKey];
-  if (!keyCode && /^[A-Z0-9]$/.test(rawKey)) keyCode = rawKey.charCodeAt(0);
-  const functionMatch = /^F([1-9]|1\d|2[0-4])$/.exec(rawKey);
-  if (!keyCode && functionMatch) keyCode = 0x6F + Number(functionMatch[1]);
-  if (!keyCode) throw new Error('Tecla no permitida. Usa A-Z, 0-9, F1-F24 o una tecla especial compatible.');
-  const modifierCodes = { control: 0x11, shift: 0x10, alt: 0x12, meta: 0x5B };
-  const inlineModifiers = parts.map((value) => ({ CTRL: 'control', CONTROL: 'control', SHIFT: 'shift', ALT: 'alt', WIN: 'meta', WINDOWS: 'meta', META: 'meta' }[value])).filter(Boolean);
-  if (inlineModifiers.length !== parts.length) throw new Error('La combinación contiene un modificador desconocido.');
-  const configuredModifiers = Array.isArray(action.settings?.modifiers) ? action.settings.modifiers : Array.isArray(action.modifiers) ? action.modifiers : [];
-  const modifiers = [...configuredModifiers, ...inlineModifiers];
-  const keys = [...new Set(modifiers.map((value) => modifierCodes[String(value).toLowerCase()]).filter(Boolean)), keyCode];
-  const down = keys.map((key) => `[NXHotkey]::keybd_event(${key},0,0,[UIntPtr]::Zero)`).join(';');
-  const up = [...keys].reverse().map((key) => `[NXHotkey]::keybd_event(${key},0,2,[UIntPtr]::Zero)`).join(';');
-  const script = `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class NXHotkey { [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra); }';${down};Start-Sleep -Milliseconds 45;${up}`;
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], { windowsHide: true, stdio: 'ignore' });
-  return new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`Windows no pudo enviar el atajo (código ${code}).`)));
-  });
+  return sendWindowsHotkey(action);
 }
 
 async function executeNativeAction(value, settings = {}) {
@@ -1038,7 +1010,7 @@ async function executeAction(action, keyIndex, depth = 0, macroRun = null) {
     return;
   }
   if (action.kind === 'hotkey') {
-    await sendConfiguredHotkey(action);
+    return sendConfiguredHotkey(action);
   } else if (action.kind === 'text') {
     if (process.platform !== 'win32') throw new Error('La escritura de texto requiere Windows.');
     const value = String(action.value || '');
@@ -1062,7 +1034,7 @@ async function executeAction(action, keyIndex, depth = 0, macroRun = null) {
     const error = await shell.openPath(action.value);
     if (error) throw new Error(error);
   } else if (action.kind === 'media') {
-    sendMediaKey(action.value);
+    return sendMediaKey(action.value);
   } else if (action.kind === 'native') {
     await executeNativeAction(action.value, action.settings || {});
     if (action.value === 'voxora.muteToggle') {
@@ -1288,7 +1260,10 @@ async function invoke(command, args) {
     throw lastError || new Error('VOXORA no está disponible.');
   }
   if (command === 'voxora_action') return voxoraService.action(String(args.action || ''), args.settings || {});
-  if (command === 'execute_key_action') { await executeKeyAction(structuredClone(args.key), Number(args.keyIndex || 0)); return 'Acción ejecutada.'; }
+  if (command === 'execute_key_action') {
+    const result = await executeKeyAction(structuredClone(args.key), Number(args.keyIndex || 0));
+    return typeof result === 'string' ? result : 'Acción ejecutada.';
+  }
   if (command === 'import_visual_asset') {
     const extensions = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' };
     const extension = extensions[args.mimeType];
